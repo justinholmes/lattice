@@ -84,7 +84,7 @@ upload_release_ltc_binaries_to_s3() {
     rm -rf ltc-binaries
     mkdir -p ltc-binaries
     tar xzf /workspace/lattice-release/ltc.tar.gz -C ltc-binaries
-    ltc_checksum=$(cat ltc-binaries/ltc-checksum)
+    local ltc_checksum=$(cat ltc-binaries/ltc-checksum)
     echo "Unpacked ltc.tar.gz with ltc-checksum (git sha) = ${ltc_checksum}"
 
     if [ "${ltc_checksum}" != "${GO_REVISION_LATTICE}" ]; then

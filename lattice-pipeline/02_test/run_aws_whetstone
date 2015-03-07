@@ -3,9 +3,9 @@ set -e
 
 print_provider_specific_terraform_configuration(){
     if [ "$1" == "--without-outputs" ]; then
-        terraform_outputs=""
+        local terraform_outputs=""
     else
-        terraform_outputs=',
+        local terraform_outputs=',
         "output": {
                     "lattice_target": {
                         "value": "${module.lattice-aws.lattice_target}"

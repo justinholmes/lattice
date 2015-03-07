@@ -51,7 +51,7 @@ assert_that_vtx_is_enabled_if_linux
 export DIEGO_RELEASE_PATH=$1
 export LATTICE_TAR_PATH=$2
 export VAGRANT_LATTICE_TAR_PATH=/vagrant/$(basename $LATTICE_TAR_PATH)
-WORKSPACE_DIR=`pwd`
+WORKSPACE_DIR=$(pwd)
 
 trap cleanup EXIT
 
