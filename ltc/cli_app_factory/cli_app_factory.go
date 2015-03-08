@@ -79,6 +79,17 @@ func MakeCliApp(timeoutStr, latticeVersion, ltcConfigRoot string, exitHandler ex
 		return nil
 	}
 
+	app.BashComplete = func(c *cli.Context) {
+		// This will complete if no args are passed
+		if len(c.Args()) > 0 {
+			return
+		}
+		for _, cmd := range app.Commands {
+			fmt.Println(cmd.Name)
+		}
+	}
+	app.EnableBashCompletion = true
+
 	return app
 }
 

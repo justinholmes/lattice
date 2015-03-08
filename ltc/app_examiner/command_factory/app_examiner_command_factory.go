@@ -82,6 +82,23 @@ func (factory *AppExaminerCommandFactory) MakeStatusCommand() cli.Command {
 		Description: "ltc status APP_NAME",
 		Action:      factory.appStatus,
 		Flags:       []cli.Flag{},
+		BashComplete: func(c *cli.Context) {
+			// This will complete if no args are passed
+			if len(c.Args()) > 0 {
+				return
+			}
+
+			appList, err := factory.appExaminer.ListApps()
+			if err != nil {
+				return
+			} else if len(appList) == 0 {
+				return
+			}
+
+			for _, app := range appList {
+				fmt.Println(app.ProcessGuid)
+			}
+		},
 	}
 }
 
