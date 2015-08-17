@@ -9,20 +9,15 @@ import (
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/config_helpers"
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/persister"
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/target_verifier"
-	"github.com/cloudfoundry-incubator/lattice/ltc/config/target_verifier/receptor_client_factory"
 	"github.com/cloudfoundry-incubator/lattice/ltc/exit_handler"
+	"github.com/cloudfoundry-incubator/receptor"
 	"github.com/codegangsta/cli"
 	"github.com/pivotal-golang/lager"
 )
 
-const (
-	latticeCliHomeVar = "LATTICE_CLI_HOME"
-	timeoutVar        = "LATTICE_CLI_TIMEOUT"
-)
+const latticeCliHomeVar = "LATTICE_CLI_HOME"
 
-var (
-	latticeVersion string // provided by linker argument at compile-time
-)
+var latticeVersion, diegoVersion string // provided by linker argument at compile-time
 
 func NewCliApp() *cli.App {
 	config := config.New(persister.NewFilePersister(config_helpers.ConfigFileLocation(ltcConfigRoot())))
@@ -32,9 +27,20 @@ func NewCliApp() *cli.App {
 	exitHandler := exit_handler.New(signalChan, os.Exit)
 	go exitHandler.Run()
 
-	targetVerifier := target_verifier.New(receptor_client_factory.MakeReceptorClient)
-	app := cli_app_factory.MakeCliApp(os.Getenv(timeoutVar), latticeVersion, ltcConfigRoot(), exitHandler, config, logger(), targetVerifier, os.Stdout)
-	return app
+	targetVerifier := target_verifier.New(func(target string) receptor.Client {
+		return receptor.NewClient(target)
+	})
+
+	return cli_app_factory.MakeCliApp(
+		diegoVersion,
+		latticeVersion,
+		ltcConfigRoot(),
+		exitHandler,
+		config,
+		logger(),
+		targetVerifier,
+		os.Stdout,
+	)
 }
 
 func logger() lager.Logger {

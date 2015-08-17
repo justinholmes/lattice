@@ -9,22 +9,20 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cloudfoundry-incubator/bbs"
 	cf_debug_server "github.com/cloudfoundry-incubator/cf-debug-server"
 	cf_lager "github.com/cloudfoundry-incubator/cf-lager"
 	"github.com/cloudfoundry-incubator/cf_http"
+	"github.com/cloudfoundry-incubator/consuladapter"
 	"github.com/cloudfoundry-incubator/natbeat"
-	"github.com/cloudfoundry-incubator/receptor/event"
 	"github.com/cloudfoundry-incubator/receptor/handlers"
 	"github.com/cloudfoundry-incubator/receptor/task_handler"
-	"github.com/cloudfoundry-incubator/receptor/watcher"
 	Bbs "github.com/cloudfoundry-incubator/runtime-schema/bbs"
 	"github.com/cloudfoundry-incubator/runtime-schema/bbs/lock_bbs"
-	"github.com/cloudfoundry-incubator/runtime-schema/models"
 	"github.com/cloudfoundry/dropsonde"
 	"github.com/cloudfoundry/gunk/diegonats"
 	"github.com/cloudfoundry/gunk/workpool"
 	"github.com/cloudfoundry/storeadapter/etcdstoreadapter"
-	"github.com/nu7hatch/gouuid"
 	"github.com/pivotal-golang/clock"
 	"github.com/pivotal-golang/lager"
 	"github.com/pivotal-golang/localip"
@@ -58,16 +56,16 @@ var taskHandlerAddress = flag.String(
 	"The host:port for the internal task completion callback",
 )
 
-var heartbeatInterval = flag.Duration(
-	"heartbeatInterval",
-	lock_bbs.HEARTBEAT_INTERVAL,
-	"the interval between heartbeats for maintaining presence",
+var consulCluster = flag.String(
+	"consulCluster",
+	"",
+	"comma-separated list of consul server URLs (scheme://ip:port)",
 )
 
-var etcdCluster = flag.String(
-	"etcdCluster",
-	"http://127.0.0.1:4001",
-	"Comma-separated list of etcd addresses (http://ip:port).",
+var lockTTL = flag.Duration(
+	"lockTTL",
+	lock_bbs.LockTTL,
+	"TTL for service lock",
 )
 
 var corsEnabled = flag.Bool(
@@ -112,6 +110,12 @@ var communicationTimeout = flag.Duration(
 	"Timeout applied to all HTTP requests.",
 )
 
+var bbsAddress = flag.String(
+	"bbsAddress",
+	"",
+	"Address to the BBS Server",
+)
+
 const (
 	dropsondeDestination = "localhost:3457"
 	dropsondeOrigin      = "receptor"
@@ -122,6 +126,7 @@ const (
 func main() {
 	cf_debug_server.AddFlags(flag.CommandLine)
 	cf_lager.AddFlags(flag.CommandLine)
+	etcdFlags := etcdstoreadapter.AddFlags(flag.CommandLine)
 	flag.Parse()
 
 	cf_http.Initialize(*communicationTimeout)
@@ -131,33 +136,33 @@ func main() {
 
 	initializeDropsonde(logger)
 
+	etcdOptions, err := etcdFlags.Validate()
+	if err != nil {
+		logger.Fatal("etcd-validation-failed", err)
+	}
+
 	if err := validateNatsArguments(); err != nil {
 		logger.Error("invalid-nats-flags", err)
 		os.Exit(1)
 	}
 
-	bbs := initializeReceptorBBS(logger)
-	hub := event.NewHub()
+	if err := validateBBSAddress(); err != nil {
+		logger.Fatal("invalid-bbs-address", err)
+	}
 
-	handler := handlers.New(bbs, hub, logger, *username, *password, *corsEnabled)
+	legacyBBS := initializeReceptorBBS(etcdOptions, logger)
 
-	worker, enqueue := task_handler.NewTaskWorkerPool(bbs, logger)
+	bbs := bbs.NewClient(*bbsAddress)
+
+	handler := handlers.New(bbs, legacyBBS, logger, *username, *password, *corsEnabled)
+
+	worker, enqueue := task_handler.NewTaskWorkerPool(legacyBBS, logger)
 	taskHandler := task_handler.New(enqueue, logger)
-	lrpChangeWatcher := watcher.NewWatcher(
-		bbs,
-		hub,
-		clock.NewClock(),
-		bbsWatchRetryWaitDuration,
-		logger,
-	)
 
 	members := grouper.Members{
-		{"lrp-change-watcher", lrpChangeWatcher},
 		{"server", http_server.New(*serverAddress, handler)},
 		{"worker", worker},
 		{"task-complete-handler", http_server.New(*taskHandlerAddress, taskHandler)},
-		{"heartbeater", initializeReceptorHeartbeat(*taskHandlerAddress, *heartbeatInterval, bbs, logger)},
-		{"hub-closer", closeHub(logger.Session("hub-closer"), hub)},
 	}
 
 	if *registerWithRouter {
@@ -181,13 +186,20 @@ func main() {
 
 	logger.Info("started")
 
-	err := <-monitor.Wait()
+	err = <-monitor.Wait()
 	if err != nil {
 		logger.Error("exited-with-failure", err)
 		os.Exit(1)
 	}
 
 	logger.Info("exited")
+}
+
+func validateBBSAddress() error {
+	if *bbsAddress == "" {
+		return errors.New("bbsAddress is required")
+	}
+	return nil
 }
 
 func validateNatsArguments() error {
@@ -199,22 +211,6 @@ func validateNatsArguments() error {
 	return nil
 }
 
-func closeHub(logger lager.Logger, hub event.Hub) ifrit.Runner {
-	return ifrit.RunFunc(func(signals <-chan os.Signal, ready chan<- struct{}) error {
-		logger.Info("starting")
-		defer logger.Info("finished")
-
-		close(ready)
-		logger.Info("started")
-
-		<-signals
-		logger.Info("shutting-down")
-		hub.Close()
-
-		return nil
-	})
-}
-
 func initializeDropsonde(logger lager.Logger) {
 	err := dropsonde.Initialize(dropsondeDestination, dropsondeOrigin)
 	if err != nil {
@@ -222,18 +218,30 @@ func initializeDropsonde(logger lager.Logger) {
 	}
 }
 
-func initializeReceptorBBS(logger lager.Logger) Bbs.ReceptorBBS {
-	etcdAdapter := etcdstoreadapter.NewETCDStoreAdapter(
-		strings.Split(*etcdCluster, ","),
-		workpool.NewWorkPool(100),
-	)
-
-	err := etcdAdapter.Connect()
+func initializeReceptorBBS(etcdOptions *etcdstoreadapter.ETCDOptions, logger lager.Logger) Bbs.ReceptorBBS {
+	workPool, err := workpool.NewWorkPool(100)
 	if err != nil {
-		logger.Fatal("failed-to-connect-to-etcd", err)
+		logger.Fatal("failed-to-construct-etcd-adapter-workpool", err, lager.Data{"num-workers": 100}) // should never happen
 	}
 
-	return Bbs.NewReceptorBBS(etcdAdapter, clock.NewClock(), logger)
+	etcdAdapter, err := etcdstoreadapter.New(etcdOptions, workPool)
+
+	if err != nil {
+		logger.Fatal("failed-to-construct-etcd-tls-client", err)
+	}
+
+	client, err := consuladapter.NewClient(*consulCluster)
+	if err != nil {
+		logger.Fatal("new-client-failed", err)
+	}
+
+	sessionMgr := consuladapter.NewSessionManager(client)
+	consulSession, err := consuladapter.NewSession("receptor", *lockTTL, client, sessionMgr)
+	if err != nil {
+		logger.Fatal("consul-session-failed", err)
+	}
+
+	return Bbs.NewReceptorBBS(etcdAdapter, consulSession, *taskHandlerAddress, clock.NewClock(), logger)
 }
 
 func initializeServerRegistration(logger lager.Logger) (registration natbeat.RegistryMessage) {
@@ -262,15 +270,4 @@ func initializeServerRegistration(logger lager.Logger) (registration natbeat.Reg
 		Host: host,
 		Port: port,
 	}
-}
-
-func initializeReceptorHeartbeat(taskHandlerAddress string, interval time.Duration, bbs Bbs.ReceptorBBS, logger lager.Logger) ifrit.Runner {
-	guid, err := uuid.NewV4()
-	if err != nil {
-		logger.Error("failed-to-generate-guid", err)
-		os.Exit(1)
-	}
-
-	presence := models.NewReceptorPresence(guid.String(), "http://"+taskHandlerAddress)
-	return bbs.NewReceptorHeartbeat(presence, interval)
 }

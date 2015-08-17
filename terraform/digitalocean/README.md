@@ -15,16 +15,21 @@ This project contains [Terraform](https://www.terraform.io/) templates to help y
 
 ### Configure
 
-Fill out the variables (described below) in the [example](https://github.com/cloudfoundry-incubator/lattice/blob/master/terraform/digitalocean/example/lattice.digitalocean.tf) (and if desired, copy the file to a new folder)
+Here are some step-by-step instructions for configuring a Lattice cluster via Terraform:
+
+1. Visit the [Lattice GitHub Releases page](https://github.com/cloudfoundry-incubator/lattice/releases)
+2. Select the Lattice version you wish to deploy and download the Terraform example file for your target platform.  The filename will be `lattice.digitalocean.tf`
+3. Create an empty folder and place the `lattice.digitalocean.tf` file in that folder.
+4. Update the `lattice.digitalocean.tf` by filling in the values for the variables.  Details for the values of those variables are below.
 
 The available variables that can be configured are:
 
 * `do_token`: Digital Ocean API token
-* `do_ssh_public_key_fingerprint`: SSH public key fingerprint
+* `do_ssh_public_key_id`: SSH public key id. Key ID of your uploaded SSH key.
 * `do_ssh_private_key_file`: Path to the SSH private key file
 * `do_region`: The DO region to operate under (default `nyc2`)
 * `do_image`: The droplet image ID or slug to base the launched instances (default `ubuntu-14-04-x64`)
-* `do_size_coordinator`: The DO size to use for the Lattice Coordinator instance (default `512mb`)
+* `do_size_brain`: The DO size to use for the Lattice Brain instance (default `512mb`)
 * `do_size_cell`: The DO size to use for the Lattice Cell instances (default `2gb`)
 * `num_cells`: The number of Lattice Cells to launch (default `3`)
 * `lattice_username`: Lattice username (default `user`)
@@ -33,28 +38,24 @@ The available variables that can be configured are:
 Refer to the [Terraform DigitalOcean (DO) provider](https://www.terraform.io/docs/providers/do/index.html)
 documentation for more details about how to configure the proper credentials.
 
-#### Generating the SSH public key fingerprint 
+### Getting your SSH Key ID
 
-You can generate the SSH public key fingerprint from your public key via (e.g.)
-
-```
-ssh-keygen -lf ~/.ssh/id_rsa.pub
-2048 aa:bb:cc:dd:ee:ff:aa:bb:cc:dd:ee:ff:aa:bb:cc:dd foo@bar.com (RSA)
-```
-
-The fingerprint is the second column in the output (`aa:bb...`)
+You can get the key ID by executing an API call against the Digital Ocean API. More info can found on the [DigitalOcean API Reference](https://developers.digitalocean.com/documentation/v2/#list-all-keys).  The token needed for the `Authorization: Bearer` header is the same as the DigitalOcean API Token referenced in the Prerequisites.
 
 ### Deploy
 
-Get the templates and deploy the cluster:
+Here are some step-by-step instructions for deploying a Lattice cluster via Terraform:
 
-```
-cd example/  # or the new location of lattice.aws.tf
-terraform get -update
-terraform apply
-```
+1. Run the following commands in the folder containing the `lattice.digitalocean.tf` file
 
-After the cluster has been successfully, terraform will print the Lattice domain:
+  ```bash
+  terraform get -update
+  terraform apply
+  ```
+
+  This will deploy the cluster.
+
+Upon success, terraform will print the Lattice target:
 
 ```
 Outputs:
@@ -64,9 +65,13 @@ Outputs:
   lattice_password = xxxxxxxx
 ```
 
+which you can use with the Lattice CLI to `ltc target x.x.x.x.xip.io`.
+
+Terraform will generate a `terraform.tfstate` file.  This file describes the cluster that was built - keep it around in order to modify/tear down the cluster.
+
 ### Use
 
-Refer to the [Lattice CLI](https://github.com/cloudfoundry-incubator/lattice/tree/master/ltc) documentation.
+Refer to the [Lattice CLI](../../ltc) documentation.
 
 ### Destroy
 
@@ -91,7 +96,20 @@ In the event this happens, the recommended avenue is to use the Digital Ocean co
 remove the terraform.tfstate file from the current directory, and then run "terraform apply" again to provision
 from scratch.
 
+## Updating
+
+The provided examples (i.e., `lattice.digitalocean.tf`) are pinned to a specific Bump commit or release tag in order to maintain compatibility between the Lattice build (`lattice.tgz`) and the Terraform definitions.  Currently, Terraform does not automatically update to newer revisions of Lattice.  
+
+If you want to update to the latest version of Lattice:  
+  - Update the `ref` in the `source` directive of your `lattice.digitalocean.tf` to `master`.
+  - Run `terraform get -update` to update the modules under the `.terraform/` folder.
+ 
+If you want to update to a specific version of Lattice:
+  - Choose a version from either the [Bump commits](https://github.com/cloudfoundry-incubator/lattice/commits/master) or [Releases](https://github.com/cloudfoundry-incubator/lattice/releases).
+  - Update the `ref` in the `source` directive of your `lattice.digitalocean.tf` to that version.
+  - Run `terraform get -update` to update the modules under the `.terraform/` folder.
+
 ## Copyright
 
-See [LICENSE](https://github.com/cloudfoundry-incubator/lattice/blob/master/LICENSE) for details.
+See [LICENSE](../../docs/LICENSE) for details.
 Copyright (c) 2015 [Pivotal Software, Inc](http://www.pivotal.io/).

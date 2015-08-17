@@ -8,8 +8,9 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 
-	config_package "github.com/cloudfoundry-incubator/lattice/ltc/config"
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/command_factory"
+	"github.com/cloudfoundry-incubator/lattice/ltc/config/command_factory/fake_blob_store_verifier"
+	"github.com/cloudfoundry-incubator/lattice/ltc/config/dav_blob_store"
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/persister"
 	"github.com/cloudfoundry-incubator/lattice/ltc/config/target_verifier/fake_target_verifier"
 	"github.com/cloudfoundry-incubator/lattice/ltc/exit_handler/exit_codes"
@@ -18,19 +19,22 @@ import (
 	"github.com/cloudfoundry-incubator/lattice/ltc/terminal/password_reader/fake_password_reader"
 	"github.com/cloudfoundry-incubator/lattice/ltc/test_helpers"
 	"github.com/codegangsta/cli"
+
+	config_package "github.com/cloudfoundry-incubator/lattice/ltc/config"
 )
 
 var _ = Describe("CommandFactory", func() {
 	var (
-		stdinReader        *io.PipeReader
-		stdinWriter        *io.PipeWriter
-		outputBuffer       *gbytes.Buffer
-		terminalUI         terminal.UI
-		targetCommand      cli.Command
-		config             *config_package.Config
-		fakeTargetVerifier *fake_target_verifier.FakeTargetVerifier
-		fakeExitHandler    *fake_exit_handler.FakeExitHandler
-		fakePasswordReader *fake_password_reader.FakePasswordReader
+		stdinReader           *io.PipeReader
+		stdinWriter           *io.PipeWriter
+		outputBuffer          *gbytes.Buffer
+		terminalUI            terminal.UI
+		config                *config_package.Config
+		configPersister       persister.Persister
+		fakeTargetVerifier    *fake_target_verifier.FakeTargetVerifier
+		fakeBlobStoreVerifier *fake_blob_store_verifier.FakeBlobStoreVerifier
+		fakeExitHandler       *fake_exit_handler.FakeExitHandler
+		fakePasswordReader    *fake_password_reader.FakePasswordReader
 	)
 
 	BeforeEach(func() {
@@ -40,64 +44,105 @@ var _ = Describe("CommandFactory", func() {
 		fakePasswordReader = &fake_password_reader.FakePasswordReader{}
 		terminalUI = terminal.NewUI(stdinReader, outputBuffer, fakePasswordReader)
 		fakeTargetVerifier = &fake_target_verifier.FakeTargetVerifier{}
-		config = config_package.New(persister.NewMemPersister())
+		fakeBlobStoreVerifier = &fake_blob_store_verifier.FakeBlobStoreVerifier{}
+		configPersister = persister.NewMemPersister()
+		config = config_package.New(configPersister)
 	})
 
 	Describe("TargetCommand", func() {
+		var targetCommand cli.Command
+
 		verifyOldTargetStillSet := func() {
-			config.Load()
-			Expect(config.Receptor()).To(Equal("http://olduser:oldpass@receptor.oldtarget.com"))
+			newConfig := config_package.New(configPersister)
+			Expect(newConfig.Load()).To(Succeed())
+
+			Expect(newConfig.Receptor()).To(Equal("http://olduser:oldpass@receptor.oldtarget.com"))
 		}
 
 		BeforeEach(func() {
-			commandFactory := command_factory.NewConfigCommandFactory(config, terminalUI, fakeTargetVerifier, fakeExitHandler)
+			commandFactory := command_factory.NewConfigCommandFactory(config, terminalUI, fakeTargetVerifier, fakeBlobStoreVerifier, fakeExitHandler)
 			targetCommand = commandFactory.MakeTargetCommand()
-		})
 
-		JustBeforeEach(func() {
 			config.SetTarget("oldtarget.com")
 			config.SetLogin("olduser", "oldpass")
-			config.Save()
+			Expect(config.Save()).To(Succeed())
 		})
 
 		Context("displaying the target", func() {
-			It("outputs the current target", func() {
+			JustBeforeEach(func() {
 				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{})
-
-				Expect(outputBuffer).To(test_helpers.Say("Target:\t\toldtarget.com\n"))
-				Expect(outputBuffer).To(test_helpers.Say("Username:\tolduser"))
 			})
 
-			It("does not show the username if no username is set", func() {
-				config.SetLogin("", "")
-
-				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{})
-
-				Expect(outputBuffer).ToNot(test_helpers.Say("Username:"))
+			It("outputs the current user and target host", func() {
+				Expect(outputBuffer).To(test_helpers.SayLine("Target:\t\tolduser@oldtarget.com"))
 			})
 
-			It("alerts the user if no target is set", func() {
-				config.SetTarget("")
-				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{})
+			Context("when no username is set", func() {
+				BeforeEach(func() {
+					config.SetLogin("", "")
+					Expect(config.Save()).To(Succeed())
+				})
 
-				Expect(outputBuffer).To(test_helpers.Say("Target not set."))
+				It("only prints the target", func() {
+					Expect(outputBuffer).To(test_helpers.SayLine("Target:\t\toldtarget.com"))
+				})
+			})
+
+			Context("when no target is set", func() {
+				BeforeEach(func() {
+					config.SetTarget("")
+					Expect(config.Save()).To(Succeed())
+				})
+
+				It("informs the user the target is not set", func() {
+					Expect(outputBuffer).To(test_helpers.SayLine("Target not set."))
+				})
+			})
+
+			Context("when no blob store is targeted", func() {
+				It("should specify that no blob store is targeted", func() {
+					Expect(outputBuffer).To(test_helpers.SayLine("\tNo droplet store specified."))
+				})
+			})
+
+			Context("when a blob store is targeted", func() {
+				BeforeEach(func() {
+					config.SetBlobStore("blobtarget.com", "8444", "blobUser", "password")
+					Expect(config.Save()).To(Succeed())
+				})
+
+				It("outputs the current user and blob store host", func() {
+					Expect(outputBuffer).To(test_helpers.SayLine("Droplet store:\tblobUser@blobtarget.com:8444"))
+				})
+
+				Context("when no blob store username is set", func() {
+					BeforeEach(func() {
+						config.SetBlobStore("blobtarget.com", "8444", "", "")
+						Expect(config.Save()).To(Succeed())
+					})
+
+					It("only prints the blob store host", func() {
+						Expect(outputBuffer).To(test_helpers.SayLine("Droplet store:\tblobtarget.com:8444"))
+					})
+				})
 			})
 		})
 
-		Context("setting target without auth", func() {
+		Context("when initially connecting to the receptor without authentication", func() {
 			BeforeEach(func() {
 				fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
+				fakeBlobStoreVerifier.VerifyReturns(true, nil)
 			})
 
-			It("saves the new target", func() {
-				commandFinishChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
-
-				Eventually(commandFinishChan).Should(BeClosed())
+			It("saves the new receptor target", func() {
+				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
 
 				Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(1))
 				Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.myapi.com"))
 
-				Expect(config.Receptor()).To(Equal("http://receptor.myapi.com"))
+				newConfig := config_package.New(configPersister)
+				Expect(newConfig.Load()).To(Succeed())
+				Expect(newConfig.Receptor()).To(Equal("http://receptor.myapi.com"))
 			})
 
 			It("clears out existing saved target credentials", func() {
@@ -107,99 +152,242 @@ var _ = Describe("CommandFactory", func() {
 				Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.myapi.com"))
 			})
 
+			It("saves the new blob store target", func() {
+				fakeBlobStoreVerifier.VerifyReturns(true, nil)
+
+				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+				Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+				Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+					Host: "myapi.com",
+					Port: "8444",
+				}))
+
+				newConfig := config_package.New(configPersister)
+				Expect(newConfig.Load()).To(Succeed())
+				Expect(newConfig.BlobStore()).To(Equal(dav_blob_store.Config{
+					Host: "myapi.com",
+					Port: "8444",
+				}))
+			})
+
+			Context("when the blob store requires authorization", func() {
+				It("exits", func() {
+					fakeBlobStoreVerifier.VerifyReturns(false, nil)
+
+					test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+					Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+					Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+						Host: "myapi.com",
+						Port: "8444",
+					}))
+
+					Expect(outputBuffer).To(test_helpers.SayLine("Could not authenticate with the droplet store."))
+					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
+				})
+			})
+
+			Context("when the blob store target is offline", func() {
+				It("exits", func() {
+					fakeBlobStoreVerifier.VerifyReturns(false, errors.New("some error"))
+
+					test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+					Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+					Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+						Host: "myapi.com",
+						Port: "8444",
+					}))
+
+					Expect(outputBuffer).To(test_helpers.Say("Could not connect to the droplet store."))
+					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
+				})
+			})
+
 			Context("when the persister returns errors", func() {
 				BeforeEach(func() {
-					commandFactory := command_factory.NewConfigCommandFactory(config_package.New(errorPersister("FAILURE setting api")), terminalUI, fakeTargetVerifier, fakeExitHandler)
+					commandFactory := command_factory.NewConfigCommandFactory(config_package.New(errorPersister("some error")), terminalUI, fakeTargetVerifier, fakeBlobStoreVerifier, fakeExitHandler)
 					targetCommand = commandFactory.MakeTargetCommand()
 				})
 
-				It("bubbles up errors from setting the target", func() {
+				It("exits", func() {
 					test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
 
-					Eventually(outputBuffer).Should(test_helpers.Say("FAILURE setting api"))
+					Eventually(outputBuffer).Should(test_helpers.SayLine("some error"))
 					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.FileSystemError}))
 				})
 			})
 		})
 
-		Context("setting target that requires auth", func() {
+		Context("when the receptor requires authentication", func() {
 			BeforeEach(func() {
 				fakeTargetVerifier.VerifyTargetReturns(true, false, nil)
+				fakeBlobStoreVerifier.VerifyReturns(true, nil)
 				fakePasswordReader.PromptForPasswordReturns("testpassword")
 			})
 
-			It("sets the api, username, password from the target specified", func() {
-				commandFinishChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+			It("prompts for credentials and stores them in the config", func() {
+				doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
 
 				Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
 				fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
 				stdinWriter.Write([]byte("testusername\n"))
 
-				Eventually(commandFinishChan).Should(BeClosed())
+				Eventually(doneChan).Should(BeClosed())
 
 				Expect(config.Target()).To(Equal("myapi.com"))
 				Expect(config.Receptor()).To(Equal("http://testusername:testpassword@receptor.myapi.com"))
-				Expect(outputBuffer).To(test_helpers.Say("Api Location Set"))
+				Expect(outputBuffer).To(test_helpers.Say("API location set."))
 
 				Expect(fakePasswordReader.PromptForPasswordCallCount()).To(Equal(1))
-				Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password: "))
+				Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password"))
 
 				Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(2))
 				Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.myapi.com"))
 				Expect(fakeTargetVerifier.VerifyTargetArgsForCall(1)).To(Equal("http://testusername:testpassword@receptor.myapi.com"))
 			})
 
-			Context("scenarios that should not save the config", func() {
-				BeforeEach(func() {
-					fakePasswordReader.PromptForPasswordReturns("evenworse")
-				})
+			Context("when provided receptor credentials are invalid", func() {
+				It("does not save the config", func() {
+					fakePasswordReader.PromptForPasswordReturns("some-invalid-password")
+					doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"newtarget.com"})
 
-				AfterEach(func() {
+					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
+					stdinWriter.Write([]byte("some-invalid-user\n"))
+
+					Eventually(doneChan).Should(BeClosed())
+
+					Expect(fakePasswordReader.PromptForPasswordCallCount()).To(Equal(1))
+					Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password"))
+
+					Expect(outputBuffer).To(test_helpers.SayLine("Could not authorize target."))
+
 					verifyOldTargetStillSet()
-					Expect(fakeExitHandler.ExitCalledWith[0]).To(Equal(exit_codes.BadTarget))
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
 				})
+			})
 
-				It("does not save the config if the receptor is never authorized", func() {
-					commandFinishChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"newtarget.com"})
+			Context("when the receptor returns an error while verifying the provided credentials", func() {
+				It("does not save the config", func() {
+					fakePasswordReader.PromptForPasswordReturns("some-invalid-password")
+					doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"newtarget.com"})
 
 					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
-					stdinWriter.Write([]byte("notgood\n"))
 
-					Eventually(commandFinishChan).Should(BeClosed())
-
-					Expect(fakePasswordReader.PromptForPasswordCallCount()).To(Equal(1))
-					Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password: "))
-
-					Expect(outputBuffer).To(test_helpers.Say("Could not authorize target."))
-				})
-
-				It("does not save the config if there is an error connecting to the receptor after prompting", func() {
-					commandFinishChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"newtarget.com"})
-
-					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
 					fakeTargetVerifier.VerifyTargetReturns(true, false, errors.New("Unknown Error"))
-					stdinWriter.Write([]byte("notgood\n"))
+					stdinWriter.Write([]byte("some-invalid-user\n"))
 
-					Eventually(commandFinishChan).Should(BeClosed())
+					Eventually(doneChan).Should(BeClosed())
 
 					Expect(fakePasswordReader.PromptForPasswordCallCount()).To(Equal(1))
-					Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password: "))
+					Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password"))
 
-					Expect(outputBuffer).To(test_helpers.Say("Error verifying target: Unknown Error"))
+					Expect(outputBuffer).To(test_helpers.SayLine("Error verifying target: Unknown Error"))
+
+					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
+				})
+			})
+
+			Context("when the receptor credentials work on the blob store", func() {
+				It("saves the new blob store target", func() {
+					fakeBlobStoreVerifier.VerifyReturns(true, nil)
+
+					doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
+					fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
+					stdinWriter.Write([]byte("testusername\n"))
+
+					Eventually(doneChan).Should(BeClosed())
+
+					Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+					Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+						Host:     "myapi.com",
+						Port:     "8444",
+						Username: "testusername",
+						Password: "testpassword",
+					}))
+
+					newConfig := config_package.New(configPersister)
+					Expect(newConfig.Load()).To(Succeed())
+					Expect(newConfig.Receptor()).To(Equal("http://testusername:testpassword@receptor.myapi.com"))
+					Expect(newConfig.BlobStore()).To(Equal(dav_blob_store.Config{
+						Host:     "myapi.com",
+						Port:     "8444",
+						Username: "testusername",
+						Password: "testpassword",
+					}))
+				})
+			})
+
+			Context("when the receptor credentials don't work on the blob store", func() {
+				It("does not save the config", func() {
+					fakeBlobStoreVerifier.VerifyReturns(false, nil)
+
+					doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
+					fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
+					stdinWriter.Write([]byte("testusername\n"))
+
+					Eventually(doneChan).Should(BeClosed())
+
+					Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+					Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+						Host:     "myapi.com",
+						Port:     "8444",
+						Username: "testusername",
+						Password: "testpassword",
+					}))
+
+					Expect(outputBuffer).To(test_helpers.SayLine("Could not authenticate with the droplet store."))
+					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
+				})
+			})
+
+			Context("when the blob store is offline", func() {
+				It("does not save the config", func() {
+					fakeBlobStoreVerifier.VerifyReturns(false, errors.New("some error"))
+
+					doneChan := test_helpers.AsyncExecuteCommandWithArgs(targetCommand, []string{"myapi.com"})
+
+					Eventually(outputBuffer).Should(test_helpers.Say("Username: "))
+					fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
+					stdinWriter.Write([]byte("testusername\n"))
+
+					Eventually(doneChan).Should(BeClosed())
+
+					Expect(fakeBlobStoreVerifier.VerifyCallCount()).To(Equal(1))
+					Expect(fakeBlobStoreVerifier.VerifyArgsForCall(0)).To(Equal(dav_blob_store.Config{
+						Host:     "myapi.com",
+						Port:     "8444",
+						Username: "testusername",
+						Password: "testpassword",
+					}))
+
+					Expect(outputBuffer).To(test_helpers.SayLine("Could not connect to the droplet store."))
+					verifyOldTargetStillSet()
+					Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
 				})
 			})
 		})
 
 		Context("setting an invalid target", func() {
-			It("does not save the config if the target verifier returns an error", func() {
+			It("does not save the config", func() {
 				fakeTargetVerifier.VerifyTargetReturns(true, false, errors.New("Unknown Error"))
 
 				test_helpers.ExecuteCommandWithArgs(targetCommand, []string{"newtarget.com"})
 
-				Expect(outputBuffer).To(test_helpers.Say("Error verifying target: Unknown Error"))
+				Expect(outputBuffer).To(test_helpers.SayLine("Error verifying target: Unknown Error"))
 
 				verifyOldTargetStillSet()
-				Expect(fakeExitHandler.ExitCalledWith[0]).To(Equal(exit_codes.BadTarget))
+				Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{exit_codes.BadTarget}))
 			})
 		})
 	})

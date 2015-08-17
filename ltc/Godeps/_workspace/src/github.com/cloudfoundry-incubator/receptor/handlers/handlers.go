@@ -3,20 +3,21 @@ package handlers
 import (
 	"net/http"
 
+	"github.com/cloudfoundry-incubator/bbs"
 	"github.com/cloudfoundry-incubator/receptor"
-	"github.com/cloudfoundry-incubator/receptor/event"
-	Bbs "github.com/cloudfoundry-incubator/runtime-schema/bbs"
+	legacybbs "github.com/cloudfoundry-incubator/runtime-schema/bbs"
 	"github.com/pivotal-golang/lager"
 	"github.com/tedsuo/rata"
 )
 
-func New(bbs Bbs.ReceptorBBS, hub event.Hub, logger lager.Logger, username, password string, corsEnabled bool) http.Handler {
-	taskHandler := NewTaskHandler(bbs, logger)
-	desiredLRPHandler := NewDesiredLRPHandler(bbs, logger)
-	actualLRPHandler := NewActualLRPHandler(bbs, logger)
-	cellHandler := NewCellHandler(bbs, logger)
-	domainHandler := NewDomainHandler(bbs, logger)
-	eventStreamHandler := NewEventStreamHandler(hub, logger)
+func New(bbs bbs.Client, receptorBBS legacybbs.ReceptorBBS, logger lager.Logger, username, password string, corsEnabled bool) http.Handler {
+	taskHandler := NewTaskHandler(receptorBBS, logger)
+	desiredLRPHandler := NewDesiredLRPHandler(bbs, receptorBBS, logger)
+	actualLRPHandler := NewActualLRPHandler(bbs, receptorBBS, logger)
+	cellHandler := NewCellHandler(receptorBBS, logger)
+	domainHandler := NewDomainHandler(bbs, receptorBBS, logger)
+	eventStreamHandler := NewEventStreamHandler(bbs, logger)
+	authCookieHandler := NewAuthCookieHandler(logger)
 
 	actions := rata.Handlers{
 		// Tasks
@@ -48,6 +49,9 @@ func New(bbs Bbs.ReceptorBBS, hub event.Hub, logger lager.Logger, username, pass
 
 		// Event Streaming
 		receptor.EventStream: route(eventStreamHandler.EventStream),
+
+		// Authentication Cookie
+		receptor.GenerateCookie: route(authCookieHandler.GenerateCookie),
 	}
 
 	handler, err := rata.NewRouter(receptor.Routes, actions)
@@ -63,7 +67,7 @@ func New(bbs Bbs.ReceptorBBS, hub event.Hub, logger lager.Logger, username, pass
 		handler = CORSWrapper(handler)
 	}
 
-	return handler
+	return LogWrap(handler, logger)
 }
 
 func route(f func(w http.ResponseWriter, r *http.Request)) http.Handler {

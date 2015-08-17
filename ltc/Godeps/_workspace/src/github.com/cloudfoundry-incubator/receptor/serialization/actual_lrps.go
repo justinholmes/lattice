@@ -1,30 +1,30 @@
 package serialization
 
 import (
+	"github.com/cloudfoundry-incubator/bbs/models"
 	"github.com/cloudfoundry-incubator/receptor"
-	"github.com/cloudfoundry-incubator/runtime-schema/models"
 )
 
-func ActualLRPToResponse(actualLRP models.ActualLRP, evacuating bool) receptor.ActualLRPResponse {
+func ActualLRPProtoToResponse(actualLRP *models.ActualLRP, evacuating bool) receptor.ActualLRPResponse {
 	return receptor.ActualLRPResponse{
 		ProcessGuid:     actualLRP.ProcessGuid,
 		InstanceGuid:    actualLRP.InstanceGuid,
-		CellID:          actualLRP.CellID,
+		CellID:          actualLRP.CellId,
 		Domain:          actualLRP.Domain,
-		Index:           actualLRP.Index,
+		Index:           int(actualLRP.Index),
 		Address:         actualLRP.Address,
-		Ports:           PortMappingFromModel(actualLRP.Ports),
-		State:           actualLRPStateToResponseState(actualLRP.State),
+		Ports:           PortMappingFromProto(actualLRP.Ports),
+		State:           actualLRPProtoStateToResponseState(actualLRP.State),
 		PlacementError:  actualLRP.PlacementError,
 		Since:           actualLRP.Since,
-		CrashCount:      actualLRP.CrashCount,
+		CrashCount:      int(actualLRP.CrashCount),
 		CrashReason:     actualLRP.CrashReason,
 		Evacuating:      evacuating,
-		ModificationTag: actualLRPModificationTagToResponseModificationTag(actualLRP.ModificationTag),
+		ModificationTag: actualLRPProtoModificationTagToResponseModificationTag(actualLRP.ModificationTag),
 	}
 }
 
-func actualLRPStateToResponseState(state models.ActualLRPState) receptor.ActualLRPState {
+func actualLRPProtoStateToResponseState(state string) receptor.ActualLRPState {
 	switch state {
 	case models.ActualLRPStateUnclaimed:
 		return receptor.ActualLRPStateUnclaimed
@@ -39,9 +39,9 @@ func actualLRPStateToResponseState(state models.ActualLRPState) receptor.ActualL
 	}
 }
 
-func actualLRPModificationTagToResponseModificationTag(modificationTag models.ModificationTag) receptor.ModificationTag {
+func actualLRPProtoModificationTagToResponseModificationTag(modificationTag models.ModificationTag) receptor.ModificationTag {
 	return receptor.ModificationTag{
 		Epoch: modificationTag.Epoch,
-		Index: modificationTag.Index,
+		Index: uint(modificationTag.Index),
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 func ExecuteCommandWithArgs(command cli.Command, commandArgs []string) {
 	commandFinishChan := AsyncExecuteCommandWithArgs(command, commandArgs)
+
 	Eventually(commandFinishChan).Should(BeClosed())
 }
 
@@ -27,7 +28,7 @@ func AsyncExecuteCommandWithArgs(command cli.Command, commandArgs []string) chan
 func executeCommandWithArgs(command cli.Command, commandArgs []string) {
 	cliApp := cli.NewApp()
 	cliApp.Commands = []cli.Command{command}
-	cliAppArgs := append([]string{"lattice-cli", command.Name}, commandArgs...)
-	err := cliApp.Run(cliAppArgs)
-	Expect(err).To(BeNil())
+	cliAppArgs := append([]string{"ltc", command.Name}, commandArgs...)
+
+	Expect(cliApp.Run(cliAppArgs)).To(Succeed())
 }

@@ -2,17 +2,17 @@ package exit_handler
 
 import (
 	"os"
+	"sync"
 
 	"github.com/cloudfoundry-incubator/lattice/ltc/exit_handler/exit_codes"
 )
 
 func New(signalChan chan os.Signal, systemExit func(code int)) ExitHandler {
 	return &exitHandler{
-		signalChan:      signalChan,
-		systemExit:      systemExit,
-		onExitFuncs:     make([]func(), 0),
-		onExitFuncsChan: make(chan func()),
-		exitCode:        exit_codes.SigInt,
+		signalChan:  signalChan,
+		systemExit:  systemExit,
+		onExitFuncs: make([]func(), 0),
+		exitCode:    exit_codes.SigInt,
 	}
 }
 
@@ -23,11 +23,11 @@ type ExitHandler interface {
 }
 
 type exitHandler struct {
-	onExitFuncs     []func()
-	onExitFuncsChan chan func()
-	signalChan      chan os.Signal
-	systemExit      func(int)
-	exitCode        int
+	onExitFuncs []func()
+	signalChan  chan os.Signal
+	systemExit  func(int)
+	exitCode    int
+	sync.RWMutex
 }
 
 func (e *exitHandler) Run() {
@@ -35,23 +35,23 @@ func (e *exitHandler) Run() {
 		select {
 		case signal := <-e.signalChan:
 			if signal == os.Interrupt {
-				for _, exitFunc := range e.onExitFuncs {
-					exitFunc()
-				}
-				e.systemExit(e.exitCode)
-				return
+				e.Exit(e.exitCode)
 			}
-		case exitFunc := <-e.onExitFuncsChan:
-			e.onExitFuncs = append(e.onExitFuncs, exitFunc)
 		}
 	}
 }
 
 func (e *exitHandler) OnExit(exitFunc func()) {
-	e.onExitFuncsChan <- exitFunc
+	defer e.Unlock()
+	e.Lock()
+	e.onExitFuncs = append(e.onExitFuncs, exitFunc)
 }
 
 func (e *exitHandler) Exit(code int) {
-	e.exitCode = code
-	e.signalChan <- os.Interrupt
+	defer e.RUnlock()
+	e.RLock()
+	for _, exitFunc := range e.onExitFuncs {
+		exitFunc()
+	}
+	e.systemExit(code)
 }

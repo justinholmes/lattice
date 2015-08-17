@@ -2,8 +2,7 @@ package cli_app_factory_test
 
 import (
 	"errors"
-	"sort"
-	"time"
+	"flag"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
@@ -18,36 +17,36 @@ import (
 	"github.com/cloudfoundry-incubator/lattice/ltc/test_helpers"
 	"github.com/codegangsta/cli"
 	"github.com/pivotal-golang/lager"
-
-	config_command_factory "github.com/cloudfoundry-incubator/lattice/ltc/config/command_factory"
 )
 
 var _ = Describe("CliAppFactory", func() {
+
 	var (
-		fakeTargetVerifier *fake_target_verifier.FakeTargetVerifier
-		memPersister       persister.Persister
-		outputBuffer       *gbytes.Buffer
-		terminalUI         terminal.UI
-		cliApp             *cli.App
-		cliConfig          *config.Config
-		latticeVersion     string
+		fakeTargetVerifier           *fake_target_verifier.FakeTargetVerifier
+		fakeExitHandler              *fake_exit_handler.FakeExitHandler
+		outputBuffer                 *gbytes.Buffer
+		terminalUI                   terminal.UI
+		cliApp                       *cli.App
+		cliConfig                    *config.Config
+		latticeVersion, diegoVersion string
 	)
 
 	BeforeEach(func() {
 		fakeTargetVerifier = &fake_target_verifier.FakeTargetVerifier{}
-		memPersister = persister.NewMemPersister()
+		fakeExitHandler = new(fake_exit_handler.FakeExitHandler)
+		memPersister := persister.NewMemPersister()
 		outputBuffer = gbytes.NewBuffer()
 		terminalUI = terminal.NewUI(nil, outputBuffer, nil)
 		cliConfig = config.New(memPersister)
-		latticeVersion = "v0.2.Test"
+		latticeVersion, diegoVersion = "v0.2.Test", "0.12345.0"
 	})
 
 	JustBeforeEach(func() {
 		cliApp = cli_app_factory.MakeCliApp(
-			"30",
+			diegoVersion,
 			latticeVersion,
 			"~/",
-			&fake_exit_handler.FakeExitHandler{},
+			fakeExitHandler,
 			cliConfig,
 			lager.NewLogger("test"),
 			fakeTargetVerifier,
@@ -60,65 +59,97 @@ var _ = Describe("CliAppFactory", func() {
 			Expect(cliApp).ToNot(BeNil())
 			Expect(cliApp.Name).To(Equal("ltc"))
 			Expect(cliApp.Author).To(Equal("Pivotal"))
-			Expect(cliApp.Version).To(Equal("v0.2.Test"))
-			Expect(cliApp.Email).To(Equal("lattice@cloudfoundry.org"))
+			Expect(cliApp.Version).To(Equal("v0.2.Test (diego 0.12345.0)"))
+			Expect(cliApp.Email).To(Equal("cf-lattice@lists.cloudfoundry.org"))
 			Expect(cliApp.Usage).To(Equal(cli_app_factory.LtcUsage))
 			Expect(cliApp.Commands).NotTo(BeEmpty())
-		})
+			Expect(cliApp.Action).ToNot(BeNil())
+			Expect(cliApp.CommandNotFound).ToNot(BeNil())
 
-		It("lists the subcommands in alphabetical order", func() {
-			cliCommands := cliApp.Commands
-			Expect(cliCommands).NotTo(BeEmpty())
+			By("writing to the App.Writer", func() {
+				cliApp.Writer.Write([]byte("write_sample"))
+				Expect(outputBuffer).To(test_helpers.Say("write_sample"))
+			})
 
-			var commandNames []string
-			for _, cmd := range cliCommands {
-				commandNames = append(commandNames, cmd.Name)
-			}
-			Expect(sort.StringsAreSorted(commandNames)).To(BeTrue())
 		})
 
 		Context("when invoked without latticeVersion set", func() {
 			BeforeEach(func() {
+				diegoVersion = ""
 				latticeVersion = ""
 			})
 
 			It("defaults the version", func() {
-				Expect(cliApp).ToNot(BeNil())
-				Expect(cliApp.Version).To(Equal("development (not versioned)"))
+				Expect(cliApp).NotTo(BeNil())
+				Expect(cliApp.Version).To(Equal("development (not versioned) (diego unknown)"))
 			})
 		})
 
-		Describe("App's Before Action", func() {
+		Describe("App.Action", func() {
+			Context("when ltc is run without argument(s)", func() {
+				It("prints app help", func() {
+					cli.AppHelpTemplate = "HELP_TEMPLATE"
+					flagSet := flag.NewFlagSet("flag_set", flag.ContinueOnError)
+					flagSet.Parse([]string{})
+					testContext := cli.NewContext(cliApp, flagSet, nil)
+
+					cliApp.Action(testContext)
+
+					Expect(outputBuffer).To(test_helpers.Say("ltc - Command line interface for Lattice."))
+				})
+			})
+
+			Context("when ltc is run with argument(s)", func() {
+				It("prints unknown command message", func() {
+					flagSet := flag.NewFlagSet("flag_set", flag.ContinueOnError)
+					flagSet.Parse([]string{"one_arg"})
+					testContext := cli.NewContext(cliApp, flagSet, nil)
+
+					cliApp.Action(testContext)
+
+					Expect(outputBuffer).To(test_helpers.Say("ltc: 'one_arg' is not a registered command. See 'ltc help'"))
+				})
+			})
+		})
+
+		Describe("App.CommandNotFound", func() {
+			It("prints unknown command message and exits nonzero", func() {
+				testContext := cli.NewContext(cliApp, &flag.FlagSet{}, nil)
+
+				cliApp.CommandNotFound(testContext, "do_it")
+
+				Expect(outputBuffer).To(test_helpers.Say("ltc: 'do_it' is not a registered command. See 'ltc help'"))
+				Expect(fakeExitHandler.ExitCalledWith).To(Equal([]int{1}))
+			})
+		})
+
+		Describe("App.Before", func() {
 			Context("when running the target command", func() {
 				It("does not verify the current target", func() {
 					cliConfig.SetTarget("my-lattice.example.com")
-					cliConfig.Save()
+					Expect(cliConfig.Save()).To(Succeed())
 
 					commandRan := false
 
 					cliApp.Commands = []cli.Command{
 						cli.Command{
-							Name: config_command_factory.TargetCommandName,
+							Name: "target",
 							Action: func(ctx *cli.Context) {
 								commandRan = true
 							},
 						},
 					}
 
-					cliAppArgs := []string{"ltc", config_command_factory.TargetCommandName}
-
-					err := cliApp.Run(cliAppArgs)
-
-					Expect(err).ToNot(HaveOccurred())
-					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(BeZero())
+					Expect(cliApp.Run([]string{"ltc", "target"})).To(Succeed())
 					Expect(commandRan).To(BeTrue())
+					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(0))
 				})
 			})
 
 			Context("when running the help command", func() {
 				It("does not verify the current target", func() {
 					cliConfig.SetTarget("my-lattice.example.com")
-					cliConfig.Save()
+					Expect(cliConfig.Save()).To(Succeed())
 
 					commandRan := false
 
@@ -134,17 +165,17 @@ var _ = Describe("CliAppFactory", func() {
 					cliAppArgs := []string{"ltc", "help"}
 
 					err := cliApp.Run(cliAppArgs)
+					Expect(err).NotTo(HaveOccurred())
 
-					Expect(err).ToNot(HaveOccurred())
-					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(BeZero())
 					Expect(commandRan).To(BeTrue())
+					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(BeZero())
 				})
 			})
 
 			Context("when running the bare ltc command", func() {
 				It("does not verify the current target", func() {
 					cliConfig.SetTarget("my-lattice.example.com")
-					cliConfig.Save()
+					Expect(cliConfig.Save()).To(Succeed())
 
 					commandRan := false
 					cliApp.Action = func(context *cli.Context) {
@@ -154,17 +185,17 @@ var _ = Describe("CliAppFactory", func() {
 					cliAppArgs := []string{"ltc"}
 
 					err := cliApp.Run(cliAppArgs)
+					Expect(err).NotTo(HaveOccurred())
 
-					Expect(err).ToNot(HaveOccurred())
-					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(BeZero())
 					Expect(commandRan).To(BeTrue())
+					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(0))
 				})
 			})
 
 			Context("when we cannot find the subcommand", func() {
 				It("does not verify the current target", func() {
 					cliConfig.SetTarget("my-lattice.example.com")
-					cliConfig.Save()
+					Expect(cliConfig.Save()).To(Succeed())
 
 					commandRan := false
 					cliApp.Action = func(context *cli.Context) {
@@ -174,10 +205,10 @@ var _ = Describe("CliAppFactory", func() {
 					cliAppArgs := []string{"ltc", "buy-me-a-pony"}
 
 					err := cliApp.Run(cliAppArgs)
+					Expect(err).NotTo(HaveOccurred())
 
-					Expect(err).ToNot(HaveOccurred())
-					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(BeZero())
 					Expect(commandRan).To(BeTrue())
+					Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(0))
 				})
 			})
 
@@ -187,21 +218,26 @@ var _ = Describe("CliAppFactory", func() {
 						fakeTargetVerifier.VerifyTargetReturns(true, true, nil)
 
 						cliConfig.SetTarget("my-lattice.example.com")
-						cliConfig.Save()
+						Expect(cliConfig.Save()).To(Succeed())
 
 						commandRan := false
-						cliApp.Commands = []cli.Command{cli.Command{Name: "print-a-unicorn", Action: func(ctx *cli.Context) {
-							commandRan = true
-						}}}
+						cliApp.Commands = []cli.Command{
+							cli.Command{
+								Name: "print-a-unicorn",
+								Action: func(ctx *cli.Context) {
+									commandRan = true
+								},
+							},
+						}
 
 						cliAppArgs := []string{"ltc", "print-a-unicorn"}
 
 						err := cliApp.Run(cliAppArgs)
+						Expect(err).NotTo(HaveOccurred())
 
-						Expect(err).ToNot(HaveOccurred())
+						Expect(commandRan).To(BeTrue())
 						Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(1))
 						Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.my-lattice.example.com"))
-						Expect(commandRan).To(BeTrue())
 					})
 				})
 
@@ -209,20 +245,26 @@ var _ = Describe("CliAppFactory", func() {
 					It("Prints an error message and does not execute the command", func() {
 						fakeTargetVerifier.VerifyTargetReturns(true, false, nil)
 						cliConfig.SetTarget("my-borked-lattice.example.com")
-						cliConfig.Save()
+						Expect(cliConfig.Save()).To(Succeed())
 
 						commandRan := false
-						cliApp.Commands = []cli.Command{cli.Command{Name: "print-a-unicorn", Action: func(ctx *cli.Context) { commandRan = true }}}
+						cliApp.Commands = []cli.Command{
+							cli.Command{
+								Name:   "print-a-unicorn",
+								Action: func(ctx *cli.Context) { commandRan = true },
+							},
+						}
 
 						cliAppArgs := []string{"ltc", "print-a-unicorn"}
 
 						err := cliApp.Run(cliAppArgs)
+						Expect(err).To(MatchError("Could not authenticate with the receptor."))
 
-						Expect(err).To(HaveOccurred())
 						Expect(outputBuffer).To(test_helpers.Say("Could not authenticate with the receptor. Please run ltc target with the correct credentials."))
+						Expect(commandRan).To(BeFalse())
+
 						Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(1))
 						Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.my-borked-lattice.example.com"))
-						Expect(commandRan).To(BeFalse())
 					})
 				})
 
@@ -231,39 +273,31 @@ var _ = Describe("CliAppFactory", func() {
 						fakeTargetVerifier.VerifyTargetReturns(false, false, errors.New("oopsie!"))
 
 						cliConfig.SetTarget("my-borked-lattice.example.com")
-						cliConfig.Save()
+						Expect(cliConfig.Save()).To(Succeed())
 
 						commandRan := false
-						cliApp.Commands = []cli.Command{cli.Command{Name: "print-a-unicorn", Action: func(ctx *cli.Context) { commandRan = true }}}
+						cliApp.Commands = []cli.Command{
+							cli.Command{
+								Name:   "print-a-unicorn",
+								Action: func(ctx *cli.Context) { commandRan = true },
+							},
+						}
 
 						cliAppArgs := []string{"ltc", "print-a-unicorn"}
 
 						err := cliApp.Run(cliAppArgs)
+						Expect(err).To(MatchError("oopsie!"))
 
-						Expect(err).To(HaveOccurred())
 						Expect(outputBuffer).To(test_helpers.Say("Error connecting to the receptor. Make sure your lattice target is set, and that lattice is up and running.\n\tUnderlying error: oopsie!"))
+						Expect(commandRan).To(BeFalse())
+
 						Expect(fakeTargetVerifier.VerifyTargetCallCount()).To(Equal(1))
 						Expect(fakeTargetVerifier.VerifyTargetArgsForCall(0)).To(Equal("http://receptor.my-borked-lattice.example.com"))
-						Expect(commandRan).To(BeFalse())
 					})
 				})
 			})
 		})
 
-	})
-
-	Describe("Timeout", func() {
-		It("returns the timeout in seconds", func() {
-			Expect(cli_app_factory.Timeout("25")).To(Equal(25 * time.Second))
-		})
-
-		It("returns one minute for an empty string", func() {
-			Expect(cli_app_factory.Timeout("")).To(Equal(time.Minute))
-		})
-
-		It("returns one minute for an invalid string", func() {
-			Expect(cli_app_factory.Timeout("CANNOT PARSE")).To(Equal(time.Minute))
-		})
 	})
 
 	Describe("LoggregatorUrl", func() {
@@ -272,5 +306,4 @@ var _ = Describe("CliAppFactory", func() {
 			Expect(loggregatorUrl).To(Equal("ws://doppler.diego.io"))
 		})
 	})
-
 })

@@ -8,6 +8,7 @@ The following actions are available.  The details are presented below:
 - [`DownloadAction`](#downloadaction): fetches an archive (`.tgz` or `.zip`) and extracts it into the container
 - [`UploadAction`](#uploadaction): uploads a single file, in the container, to a URL via POST
 - [`ParallelAction`](#parallelaction): runs multiple actions in parallel.
+- [`CodependentAction`](#codependentaction): runs multiple actions in parallel and exits all actions after any action exits
 - [`SerialAction`](#serialaction): runs multiple actions in order.
 - [`EmitProgressAction`](#emitprogressaction): wraps another action and logs messages when the wrapped action begins and ends.
 - [`TimeoutAction`](#timeoutaction): fails if the wrapped action does not exit within a time interval.
@@ -29,7 +30,7 @@ The run action runs a process in the container:
         "resource_limits": {
             "nofile": N,
         },
-        "privileged": false,
+        "user": "username",
         "log_source": "some-log-source"
     }
 }
@@ -55,9 +56,9 @@ A list of environment variables. These are applied on top of any container-level
 
 A set of constraints to apply to the process.  Currently only file descriptor limits (`nofile`) are enforceable.
 
-#### `privileged` [optional]
+#### `user` [required]
 
-If true the process will run with *root* privileges.  This may be disabled by the operator managing Diego.  If it is disabled, the `RunAction` will fail.  If the associated Task/LRP has the container-level `privileged` flag set to `true` then this will correspond to *real* root, otherwise the process will be run as a user-namespaced root.
+The user that runs the action. Running as 'root' may be disabled by the operator managing Diego. If it is disabled, the `RunAction` will fail.  If the associated Task/LRP has the container-level `privileged` flag set to `true` then this will correspond to *real* root, otherwise the process will be run as a user-namespaced root.
 
 #### `log_source` [optional]
 
@@ -73,6 +74,7 @@ The download action downloads an archive and extracts it to a specified location
         "artifact": "download name"
         "from": "http://some/endpoint",
         "to": "/some/container/path",
+        "user": "username",
         "cache_key": "some-cache-key",
         "log_source": "some-log-source"
     }
@@ -89,6 +91,10 @@ The url from which to fetch the archive.  The downloaded asset must be a gzipped
 #### `to` [required]
 
 The absolute path to extract the archive into.
+
+#### `user` [required]
+
+The user that downloads the artifact. Running as 'root' may be disabled by the operator managing Diego. If it is disabled, the `DownloadAction` will fail.  If the associated Task/LRP has the container-level `privileged` flag set to `true` then this will correspond to *real* root, otherwise the download will be run as a user-namespaced root.
 
 #### `cache_key` [optional]
 
@@ -108,6 +114,7 @@ The upload action uploads a file to the specified location:
         "artifact": "upload name"
         "to": "http://some/endpoint",
         "from": "/some/container/file",
+        "user": "username",
         "log_source": "some-log-source"
     }
 }
@@ -124,6 +131,10 @@ The absolute path to a *file* in the container.
 #### `to` [required]
 
 A URL to upload the file to.  The upload will be an HTTP POST.
+
+#### `user` [required]
+
+The user that uploads the artifact. Running as 'root' may be disabled by the operator managing Diego. If it is disabled, the `UploadAction` will fail.  If the associated Task/LRP has the container-level `privileged` flag set to `true` then this will correspond to *real* root, otherwise the upload will be run as a user-namespaced root.
 
 #### `log_source` [optional]
 
@@ -174,6 +185,31 @@ If provided, logs emitted by this action and its subactions will be tagged with 
 An array of embedded actions to run.  The actions are run in parallel.
 
 The parallel action returns after all actions have returned.  The parallel action errors if any of the actions error, returning the first error it sees.
+
+#### `log_source` [optional]
+
+If provided, logs emitted by this action and its subactions will be tagged with the provided `log_source`.  Otherwise the container-level `log_source` is used.
+
+## `CodependentAction`
+
+```
+{
+    "codependent": {
+        "actions": [
+            { ...an embedded action... },
+            { ...an embedded action... },
+            ...
+        ]
+        "log_source": "some-log-source"
+    }
+}
+```
+
+#### `actions` [required]
+
+An array of embedded actions to run.  The actions are run in parallel.
+
+The codependent action returns after any action exits.  The codependent action always errors as it is intended to run indefinitely.  
 
 #### `log_source` [optional]
 

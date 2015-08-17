@@ -8,7 +8,7 @@ import (
 )
 
 type FakeTargetVerifier struct {
-	VerifyTargetStub        func(name string) (receptorUp bool, authorized bool, err error)
+	VerifyTargetStub        func(name string) (up bool, auth bool, err error)
 	verifyTargetMutex       sync.RWMutex
 	verifyTargetArgsForCall []struct {
 		name string
@@ -20,7 +20,7 @@ type FakeTargetVerifier struct {
 	}
 }
 
-func (fake *FakeTargetVerifier) VerifyTarget(name string) (receptorUp bool, authorized bool, err error) {
+func (fake *FakeTargetVerifier) VerifyTarget(name string) (up bool, auth bool, err error) {
 	fake.verifyTargetMutex.Lock()
 	fake.verifyTargetArgsForCall = append(fake.verifyTargetArgsForCall, struct {
 		name string

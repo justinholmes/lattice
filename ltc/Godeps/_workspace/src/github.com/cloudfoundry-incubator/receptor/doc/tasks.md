@@ -11,8 +11,6 @@ When submitting a Task you `POST` a valid `TaskCreateRequest`.  The [API referen
     "task_guid": "some-guid",
     "domain": "some-domain",
 
-    "stack": "lucid64",
-
     "rootfs": "docker:///docker-org/docker-image",
     "env": [
         {"name": "ENV_NAME_A", "value": "ENV_VALUE_A"},
@@ -65,23 +63,23 @@ The consumer of Diego may organize their Tasks into groupings called Domains.  T
 
 - It is an error to provide an empty `domain`.
 
-#### Task Placement
-
-In the future Diego will support the notion of Placement Pools via arbitrary tags associated with Cells.  For now, this functionality is limited to the notion of `stack`.
-
-#### `stack` [required]
-
-Diego can support different target platforms (linux, windows, etc.). `stack` allows you to select which target platform the Task must run against.  For a typical Diego deployment you should set `stack` to `lucid64`
-
-- It is an error to provide an empty `stack`.
-
 #### Container Contents and Environment
 
-#### `rootfs` [optional]
+The `rootfs` field specifies the root filesystem to mount into the container.  Diego can be configured with a set of *preloaded* RootFSes.  These are named root filesystems that are already on the Diego Cells.
 
-By default, when provisioning a container, Diego will mount a pre-configured root filesystem.  Currently, the default filesystem provided by [diego-release](https://github.com/cloudfoundry-incubator/diego-release) is based on lucid64 and is geared towards supporting the Cloud Foundry buildpacks.
+Preloaded root filesystems look like:
 
-It is possible, however, to provide a custom root filesystem by specifying a Docker image for `rootfs`:
+```
+"rootfs": "preloaded:ROOTFS-NAME"
+```
+
+Diego ships with a root filesystem:
+```
+"rootfs": "preloaded:cflinuxfs2"
+```
+these are built to work with the Cloud Foundry buildpacks.
+
+It is possible to provide a custom root filesystem by specifying a Docker image for `rootfs`:
 
 ```
 "rootfs": "docker:///docker-org/docker-image#docker-tag"
@@ -95,7 +93,7 @@ To pull the image from a different registry than the default (Docker Hub), speci
 
 > You *must* specify the dockerimage `rootfs` uri as specified, including the leading `docker://`!
 
-> [Lattice](https://github.com/pivotal-cf-experimental/lattice) does not ship with a default rootfs. You must specify a docker-image when using Lattice. You can mount the filesystem provided by diego-release by specifying `"rootfs": "docker:///cloudfoundry/lucid64"` or `"rootfs": "docker:///cloudfoundry/trusty64"`.
+> [Lattice](https://github.com/pivotal-cf-experimental/lattice) does not ship with any preloaded root filesystems. You must specify a Docker image when using Lattice. You can mount the filesystem provided by diego-release by specifying `"rootfs": "docker:///cloudfoundry/cflinuxfs2"`.
 
 #### `env` [optional]
 
@@ -144,9 +142,9 @@ When the `action` on a Task terminates the Task is marked as `COMPLETED`.
 
 #### `result_file` [optional]
 
-When a Task completes succesfully Diego can fetch and return the contents of a file in the container.  This is made available in the `result` field of the `TaskResponse` (see [below](#retreiving-tasks)).
+When a Task completes succesfully Diego can fetch and return the contents of a file in the container.  This is made available in the `result` field of the `TaskResponse` (see [below](#retrieving-tasks)).
 
-To do this, set `result_file` to a valid path in the container.
+To do this, set `result_file` to a valid absolute path in the container.
 
 - Diego only returns the first 10KB of the `result_file`.  If you need to communicate back larger datasets, consider using an `UploadAction` to upload the result file to a blob store.
 
@@ -154,7 +152,7 @@ To do this, set `result_file` to a valid path in the container.
 
 Consumers of Diego have two options to learn that a Task has `COMPLETED`: they can either poll the action or register a callback.
 
-If a `completion_callback_url` is provided Diego will `POST` to the provided URL as soon as the Task completes.  The body of the `POST` will include the `TaskResponse` (see [below](#retreiving-tasks)).
+If a `completion_callback_url` is provided Diego will `POST` to the provided URL as soon as the Task completes.  The body of the `POST` will include the `TaskResponse` (see [below](#retrieving-tasks)).
 
 - Any response from the callback (be it success or failure) will resolve the Task (removing it from Diego).
 - However, if the callback responds with `503` or `504` Diego will immediately retry the callback up to 3 times.  If the `503/504` status persists Diego will try again after a period of time (typically within ~30 seconds).
@@ -264,7 +262,7 @@ Diego uses [doppler](https://github.com/cloudfoundry/loggregator) to emit logs g
 
 Diego allows arbitrary annotations to be attached to a Task.  The annotation must not exceed 10 kilobytes in size.
 
-## Retreiving Tasks
+## Retrieving Tasks
 
 To learn that a Task is completed you must either register a `completion_callback_url` or periodically poll the API to fetch the Task in question.  In both cases, you will receive an object that includes **all the fields on the `TaskCreateRequest`** and the following additional fields:
 

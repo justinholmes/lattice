@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/cloudfoundry-incubator/bbs/models"
 	"github.com/cloudfoundry-incubator/receptor"
 	"github.com/cloudfoundry-incubator/receptor/serialization"
 	"github.com/cloudfoundry-incubator/runtime-schema/bbs/bbserrors"
-	"github.com/cloudfoundry-incubator/runtime-schema/models"
+	oldmodels "github.com/cloudfoundry-incubator/runtime-schema/models"
 	"github.com/tedsuo/ifrit/ginkgomon"
 
 	. "github.com/onsi/ginkgo"
@@ -18,7 +19,8 @@ var _ = Describe("Actual LRP API", func() {
 	const lrpCount = 6
 
 	var (
-		evacuatingLRPKey models.ActualLRPKey
+		evacuatingLRPKey    models.ActualLRPKey
+		oldEvacuatingLRPKey oldmodels.ActualLRPKey
 	)
 
 	BeforeEach(func() {
@@ -28,35 +30,36 @@ var _ = Describe("Actual LRP API", func() {
 			index := strconv.Itoa(i)
 			lrpKey := models.NewActualLRPKey(
 				"process-guid-"+index,
-				i,
+				int32(i),
 				fmt.Sprintf("domain-%d", i/2),
 			)
 			instanceKey := models.NewActualLRPInstanceKey(
 				"instance-guid-"+index,
 				"cell-id",
 			)
-			netInfo := models.NewActualLRPNetInfo("the-host", []models.PortMapping{{ContainerPort: 80, HostPort: uint16(1000 + i)}})
-			err := bbs.StartActualLRP(logger, lrpKey, instanceKey, netInfo)
-			Ω(err).ShouldNot(HaveOccurred())
+			netInfo := models.NewActualLRPNetInfo("the-host", models.NewPortMapping(uint32(1000+i), 80))
+			_, err := bbsClient.StartActualLRP(&lrpKey, &instanceKey, &netInfo)
+			Expect(err).NotTo(HaveOccurred())
 		}
 
-		desiredLRP := models.DesiredLRP{
+		desiredLRP := oldmodels.DesiredLRP{
 			ProcessGuid: "process-guid-0",
 			Domain:      "domain-0",
 			Instances:   1,
 			RootFS:      "some:rootfs",
 			Ports:       []uint16{80},
-			Action:      &models.RunAction{Path: "/bin/true"},
+			Action:      &oldmodels.RunAction{User: "me", Path: "/bin/true"},
 		}
 
-		err := bbs.DesireLRP(logger, desiredLRP)
-		Ω(err).ShouldNot(HaveOccurred())
+		err := legacyBBS.DesireLRP(logger, desiredLRP)
+		Expect(err).NotTo(HaveOccurred())
 
 		evacuatingLRPKey = models.NewActualLRPKey("process-guid-0", 0, "domain-0")
-		instanceKey := models.NewActualLRPInstanceKey("instance-guid-0", "cell-id")
-		netInfo := models.NewActualLRPNetInfo("the-host", []models.PortMapping{{ContainerPort: 80, HostPort: 1000}})
-		_, err = bbs.EvacuateRunningActualLRP(logger, evacuatingLRPKey, instanceKey, netInfo, 0)
-		Ω(err).Should(Equal(bbserrors.ErrServiceUnavailable))
+		oldEvacuatingLRPKey = oldmodels.NewActualLRPKey("process-guid-0", 0, "domain-0")
+		instanceKey := oldmodels.NewActualLRPInstanceKey("instance-guid-0", "cell-id")
+		netInfo := oldmodels.NewActualLRPNetInfo("the-host", []oldmodels.PortMapping{{ContainerPort: 80, HostPort: 1000}})
+		_, err = legacyBBS.EvacuateRunningActualLRP(logger, oldEvacuatingLRPKey, instanceKey, netInfo, 0)
+		Expect(err).To(Equal(bbserrors.ErrServiceUnavailable))
 	})
 
 	AfterEach(func() {
@@ -72,31 +75,28 @@ var _ = Describe("Actual LRP API", func() {
 		})
 
 		It("responds without an error", func() {
-			Ω(getErr).ShouldNot(HaveOccurred())
+			Expect(getErr).NotTo(HaveOccurred())
 		})
 
 		It("fetches all of the actual lrps", func() {
-			Ω(actualLRPResponses).Should(HaveLen(lrpCount))
+			Expect(actualLRPResponses).To(HaveLen(lrpCount))
 		})
 
-		It("has the correct data from the bbs", func() {
-			actualLRPs, err := bbs.ActualLRPs()
-			Ω(err).ShouldNot(HaveOccurred())
+		It("has the correct data from the BBS", func() {
+			actualLRPGroups, err := bbsClient.ActualLRPGroups(models.ActualLRPFilter{})
+			Expect(err).NotTo(HaveOccurred())
 
 			expectedResponses := make([]receptor.ActualLRPResponse, 0, lrpCount)
-			for _, actualLRP := range actualLRPs {
-				if actualLRP.ActualLRPKey == evacuatingLRPKey {
+			for _, actualLRPGroup := range actualLRPGroups {
+				actualLRP, evacuating := actualLRPGroup.Resolve()
+				if actualLRP.ActualLRPKey.Equal(evacuatingLRPKey) {
 					continue
 				}
 
-				expectedResponses = append(expectedResponses, serialization.ActualLRPToResponse(actualLRP, false))
+				expectedResponses = append(expectedResponses, serialization.ActualLRPProtoToResponse(actualLRP, evacuating))
 			}
 
-			evacuatingLRP, err := bbs.EvacuatingActualLRPByProcessGuidAndIndex(evacuatingLRPKey.ProcessGuid, evacuatingLRPKey.Index)
-			Ω(err).ShouldNot(HaveOccurred())
-			expectedResponses = append(expectedResponses, serialization.ActualLRPToResponse(evacuatingLRP, true))
-
-			Ω(actualLRPResponses).Should(ConsistOf(expectedResponses))
+			Expect(actualLRPResponses).To(ConsistOf(expectedResponses))
 		})
 	})
 
@@ -109,25 +109,25 @@ var _ = Describe("Actual LRP API", func() {
 		})
 
 		It("responds without an error", func() {
-			Ω(getErr).ShouldNot(HaveOccurred())
+			Expect(getErr).NotTo(HaveOccurred())
 		})
 
 		It("fetches all of the actual lrps", func() {
-			Ω(actualLRPResponses).Should(HaveLen(2))
+			Expect(actualLRPResponses).To(HaveLen(2))
 		})
 
 		It("has the correct data from the bbs", func() {
 			expectedResponses := []receptor.ActualLRPResponse{}
 
-			instanceLRPGroup, err := bbs.ActualLRPGroupByProcessGuidAndIndex("process-guid-1", 1)
-			Ω(err).ShouldNot(HaveOccurred())
-			expectedResponses = append(expectedResponses, serialization.ActualLRPToResponse(*instanceLRPGroup.Instance, false))
+			instanceLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex("process-guid-1", 1)
+			Expect(err).NotTo(HaveOccurred())
+			expectedResponses = append(expectedResponses, serialization.ActualLRPProtoToResponse(instanceLRPGroup.Instance, false))
 
-			evacuatingLRP, err := bbs.EvacuatingActualLRPByProcessGuidAndIndex(evacuatingLRPKey.ProcessGuid, evacuatingLRPKey.Index)
-			Ω(err).ShouldNot(HaveOccurred())
-			expectedResponses = append(expectedResponses, serialization.ActualLRPToResponse(evacuatingLRP, true))
+			evacuatingLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex(evacuatingLRPKey.ProcessGuid, int(evacuatingLRPKey.Index))
+			Expect(err).NotTo(HaveOccurred())
+			expectedResponses = append(expectedResponses, serialization.ActualLRPProtoToResponse(evacuatingLRPGroup.Evacuating, true))
 
-			Ω(actualLRPResponses).Should(ConsistOf(expectedResponses))
+			Expect(actualLRPResponses).To(ConsistOf(expectedResponses))
 		})
 	})
 
@@ -140,18 +140,17 @@ var _ = Describe("Actual LRP API", func() {
 		})
 
 		It("responds without an error", func() {
-			Ω(getErr).ShouldNot(HaveOccurred())
+			Expect(getErr).NotTo(HaveOccurred())
 		})
 
 		It("fetches all of the actual lrps for the process guid", func() {
-			Ω(actualLRPResponses).Should(HaveLen(1))
+			Expect(actualLRPResponses).To(HaveLen(1))
 		})
 
 		It("has the correct data from the bbs", func() {
-			evacuatingLRP, err := bbs.EvacuatingActualLRPByProcessGuidAndIndex(evacuatingLRPKey.ProcessGuid, evacuatingLRPKey.Index)
-			Ω(err).ShouldNot(HaveOccurred())
-
-			Ω(actualLRPResponses).Should(ConsistOf(serialization.ActualLRPToResponse(evacuatingLRP, true)))
+			evacuatingLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex(evacuatingLRPKey.ProcessGuid, int(evacuatingLRPKey.Index))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(actualLRPResponses).To(ConsistOf(serialization.ActualLRPProtoToResponse(evacuatingLRPGroup.Evacuating, true)))
 		})
 	})
 
@@ -167,25 +166,25 @@ var _ = Describe("Actual LRP API", func() {
 
 			lrpKey := models.NewActualLRPKey(
 				processGuid,
-				index,
+				int32(index),
 				"domain-0",
 			)
 			instanceKey := models.NewActualLRPInstanceKey(
 				"instance-guid-0",
 				"cell-id",
 			)
-			netInfo := models.NewActualLRPNetInfo("the-host", []models.PortMapping{{ContainerPort: 80, HostPort: 2345}})
-			err := bbs.StartActualLRP(logger, lrpKey, instanceKey, netInfo)
-			Ω(err).ShouldNot(HaveOccurred())
+			netInfo := models.NewActualLRPNetInfo("the-host", models.NewPortMapping(2345, 80))
+			_, err := bbsClient.StartActualLRP(&lrpKey, &instanceKey, &netInfo)
+			Expect(err).NotTo(HaveOccurred())
 
 			actualLRPResponse, getErr = client.ActualLRPByProcessGuidAndIndex(processGuid, index)
-			Ω(getErr).ShouldNot(HaveOccurred())
+			Expect(getErr).NotTo(HaveOccurred())
 		})
 
 		It("has the correct data from the bbs", func() {
-			actualLRPGroup, err := bbs.ActualLRPGroupByProcessGuidAndIndex(processGuid, index)
-			Ω(err).ShouldNot(HaveOccurred())
-			Ω(actualLRPResponse).Should(Equal(serialization.ActualLRPToResponse(*actualLRPGroup.Instance, false)))
+			actualLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex(processGuid, index)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(actualLRPResponse).To(Equal(serialization.ActualLRPProtoToResponse(actualLRPGroup.Instance, false)))
 		})
 	})
 })

@@ -47,6 +47,14 @@ type InstanceInfo struct {
 	Since          int64
 	PlacementError string
 	CrashCount     int
+	HasMetrics     bool
+	Metrics        InstanceMetrics
+}
+
+type InstanceMetrics struct {
+	CpuPercentage float64
+	MemoryBytes   uint64
+	DiskBytes     uint64
 }
 
 type instanceInfoSortableByIndex []InstanceInfo
@@ -68,6 +76,10 @@ type CellInfo struct {
 	RunningInstances int
 	ClaimedInstances int
 	Missing          bool
+	Zone             string
+	MemoryMB         int
+	DiskMB           int
+	Containers       int
 }
 
 //go:generate counterfeiter -o fake_app_examiner/fake_app_examiner.go . AppExaminer
@@ -81,10 +93,11 @@ type AppExaminer interface {
 
 type appExaminer struct {
 	receptorClient receptor.Client
+	noaaConsumer   NoaaConsumer
 }
 
-func New(receptorClient receptor.Client) *appExaminer {
-	return &appExaminer{receptorClient}
+func New(receptorClient receptor.Client, noaaConsumer NoaaConsumer) AppExaminer {
+	return &appExaminer{receptorClient, noaaConsumer}
 }
 
 func (e *appExaminer) ListCells() ([]CellInfo, error) {
@@ -95,7 +108,13 @@ func (e *appExaminer) ListCells() ([]CellInfo, error) {
 	}
 
 	for _, cell := range cellList {
-		allCells[cell.CellID] = &CellInfo{CellID: cell.CellID}
+		allCells[cell.CellID] = &CellInfo{
+			CellID:     cell.CellID,
+			Zone:       cell.Zone,
+			MemoryMB:   cell.Capacity.MemoryMB,
+			DiskMB:     cell.Capacity.DiskMB,
+			Containers: cell.Capacity.Containers,
+		}
 	}
 
 	actualLRPs, err := e.receptorClient.ActualLRPs()
@@ -161,6 +180,29 @@ func (e *appExaminer) AppStatus(appName string) (AppInfo, error) {
 		return AppInfo{}, errors.New(AppNotFoundErrorMessage)
 	}
 
+	containerMetrics, err := e.noaaConsumer.GetContainerMetrics(appName, "")
+	if err != nil {
+		return *appInfoPtr, nil
+	}
+
+	indexMap := make(map[int]int, 0)
+	for index, instance := range appInfoPtr.ActualInstances {
+		indexMap[instance.Index] = index
+	}
+
+	for _, metric := range containerMetrics {
+		metricIndex, ok := indexMap[int(metric.GetInstanceIndex())]
+		if !ok {
+			continue
+		}
+		instanceInfo := &appInfoPtr.ActualInstances[metricIndex]
+		instanceInfo.HasMetrics = true
+		instanceInfo.Metrics = InstanceMetrics{
+			CpuPercentage: metric.GetCpuPercentage(),
+			MemoryBytes:   metric.GetMemoryBytes(),
+			DiskBytes:     metric.GetDiskBytes(),
+		}
+	}
 	return *appInfoPtr, nil
 }
 
@@ -247,6 +289,7 @@ func mergeDesiredActualLRPs(desiredLRPs []receptor.DesiredLRPResponse, actualLRP
 			Since:          actualLRP.Since,
 			PlacementError: actualLRP.PlacementError,
 			CrashCount:     actualLRP.CrashCount,
+			HasMetrics:     false,
 		}
 
 		appMap[actualLRP.ProcessGuid].ActualInstances = append(appMap[actualLRP.ProcessGuid].ActualInstances, instanceInfo)
@@ -300,9 +343,9 @@ func sortCells(allCells map[string]*CellInfo) []CellInfo {
 	return sortedCells
 }
 
-func sortCellKeys(allApps map[string]*CellInfo) []string {
-	keys := make([]string, 0, len(allApps))
-	for key := range allApps {
+func sortCellKeys(allCells map[string]*CellInfo) []string {
+	keys := make([]string, 0, len(allCells))
+	for key := range allCells {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)

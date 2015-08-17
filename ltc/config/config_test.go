@@ -7,12 +7,22 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/cloudfoundry-incubator/lattice/ltc/config"
+	"github.com/cloudfoundry-incubator/lattice/ltc/config/dav_blob_store"
 )
 
-var _ = Describe("config", func() {
+var _ = Describe("Config", func() {
+	var (
+		testPersister *fakePersister
+		testConfig    *config.Config
+	)
+
+	BeforeEach(func() {
+		testPersister = &fakePersister{}
+		testConfig = config.New(testPersister)
+	})
+
 	Describe("Target", func() {
 		It("sets the target", func() {
-			testConfig := config.New(&fakePersister{})
 			testConfig.SetTarget("mynewapi.com")
 
 			Expect(testConfig.Target()).To(Equal("mynewapi.com"))
@@ -21,7 +31,6 @@ var _ = Describe("config", func() {
 
 	Describe("Username", func() {
 		It("sets the target", func() {
-			testConfig := config.New(&fakePersister{})
 			testConfig.SetLogin("ausername", "apassword")
 
 			Expect(testConfig.Username()).To(Equal("ausername"))
@@ -30,7 +39,6 @@ var _ = Describe("config", func() {
 
 	Describe("Receptor", func() {
 		It("returns the Receptor with a username and password", func() {
-			testConfig := config.New(&fakePersister{})
 			testConfig.SetTarget("mynewapi.com")
 			testConfig.SetLogin("testusername", "testpassword")
 
@@ -38,7 +46,6 @@ var _ = Describe("config", func() {
 		})
 
 		It("returns a Receptor without a username and password", func() {
-			testConfig := config.New(&fakePersister{})
 			testConfig.SetTarget("mynewapi.com")
 			testConfig.SetLogin("", "")
 
@@ -48,7 +55,6 @@ var _ = Describe("config", func() {
 
 	Describe("Loggregator", func() {
 		It("provides the loggregator doppler path", func() {
-			testConfig := config.New(&fakePersister{})
 			testConfig.SetTarget("mytestapi.com")
 
 			Expect(testConfig.Loggregator()).To(Equal("doppler.mytestapi.com"))
@@ -57,47 +63,53 @@ var _ = Describe("config", func() {
 
 	Describe("Save", func() {
 		It("Saves the target with the persistor", func() {
-			fakePersister := &fakePersister{}
-			testConfig := config.New(fakePersister)
-
 			testConfig.SetTarget("mynewapi.com")
 			testConfig.SetLogin("testusername", "testpassword")
+			Expect(testConfig.Save()).To(Succeed())
 
-			testConfig.Save()
-
-			Expect(fakePersister.target).To(Equal("mynewapi.com"))
-			Expect(fakePersister.username).To(Equal("testusername"))
-			Expect(fakePersister.password).To(Equal("testpassword"))
+			Expect(testPersister.target).To(Equal("mynewapi.com"))
+			Expect(testPersister.username).To(Equal("testusername"))
+			Expect(testPersister.password).To(Equal("testpassword"))
 		})
 
 		It("returns errors from the persistor", func() {
-			testConfig := config.New(&fakePersister{err: errors.New("Error")})
+			testPersister.err = errors.New("Error")
 
 			err := testConfig.Save()
-
-			Expect(err).To(HaveOccurred())
-			Expect(err).To(Equal(errors.New("Error")))
+			Expect(err).To(MatchError("Error"))
 		})
 	})
 
 	Describe("Load", func() {
 		It("loads the target, username, and password from the persister", func() {
-			fakePersister := &fakePersister{target: "mysavedapi.com", username: "saveduser", password: "password"}
-			testConfig := config.New(fakePersister)
+			testPersister.target = "mysavedapi.com"
+			testPersister.username = "saveduser"
+			testPersister.password = "password"
 
-			testConfig.Load()
+			Expect(testConfig.Load()).To(Succeed())
 
-			Expect(fakePersister.target).To(Equal("mysavedapi.com"))
+			Expect(testPersister.target).To(Equal("mysavedapi.com"))
 			Expect(testConfig.Receptor()).To(Equal("http://saveduser:password@receptor.mysavedapi.com"))
 		})
 
 		It("returns errors from loading the config", func() {
-			testConfig := config.New(&fakePersister{err: errors.New("Error")})
+			testPersister.err = errors.New("Error")
 
 			err := testConfig.Load()
+			Expect(err).To(MatchError("Error"))
+		})
+	})
 
-			Expect(err).To(HaveOccurred())
-			Expect(err).To(Equal(errors.New("Error")))
+	Describe("TargetBlob", func() {
+		It("sets the blob target", func() {
+			testConfig.SetBlobStore("some-host", "7474", "some-username", "some-password")
+
+			Expect(testConfig.BlobStore()).To(Equal(dav_blob_store.Config{
+				Host:     "some-host",
+				Port:     "7474",
+				Username: "some-username",
+				Password: "some-password",
+			}))
 		})
 	})
 })

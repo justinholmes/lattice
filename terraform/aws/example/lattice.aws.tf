@@ -1,5 +1,9 @@
 module "lattice-aws" {
-    source = "github.com/cloudfoundry-incubator/lattice//terraform//aws?ref=v0.2.1-15-g6c68af7"
+    source = "github.com/cloudfoundry-incubator/lattice//terraform//aws?ref=v0.3.1-15-g59bf81e"
+
+    # Specify an API username and password for your lattice cluster
+    # lattice_username = "<CHANGE-ME>"
+    # lattice_password = "<CHANGE-ME>"
 
     # AWS access key
     aws_access_key = "<CHANGE-ME>"
@@ -20,8 +24,8 @@ module "lattice-aws" {
     ###  Optional Settings Below  ###
     #################################
 
-    #If you wish to use your own lattice release instead of the latest version, uncomment the variable assignment below
-    #and set it to your own lattice tar's path.
+    # If you wish to use your own lattice release instead of the latest version, 
+    # uncomment the variable assignment below and set it to your own lattice tar's path.
     # local_lattice_tar_path = "~/lattice.tgz"
 
     # AWS region (e.g., us-west-1)

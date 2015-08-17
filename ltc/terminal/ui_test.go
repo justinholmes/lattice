@@ -8,12 +8,12 @@ import (
 	"github.com/onsi/gomega/gbytes"
 
 	"github.com/cloudfoundry-incubator/lattice/ltc/terminal"
+	"github.com/cloudfoundry-incubator/lattice/ltc/terminal/password_reader"
 	"github.com/cloudfoundry-incubator/lattice/ltc/terminal/password_reader/fake_password_reader"
 	"github.com/cloudfoundry-incubator/lattice/ltc/test_helpers"
 )
 
 var _ = Describe("UI", func() {
-
 	var (
 		stdinReader        *io.PipeReader
 		stdinWriter        *io.PipeWriter
@@ -33,11 +33,11 @@ var _ = Describe("UI", func() {
 		It("instantiates a terminal", func() {
 			Expect(terminalUI).ToNot(BeNil())
 
-			_, readerOk := terminalUI.(io.Reader)
-			Expect(readerOk).To(BeTrue())
+			_, readWriterOk := terminalUI.(io.ReadWriter)
+			Expect(readWriterOk).To(BeTrue())
 
-			_, writerOk := terminalUI.(io.Writer)
-			Expect(writerOk).To(BeTrue())
+			_, passwordReaderOk := terminalUI.(password_reader.PasswordReader)
+			Expect(passwordReaderOk).To(BeTrue())
 		})
 	})
 
@@ -56,32 +56,25 @@ var _ = Describe("UI", func() {
 			})
 		})
 
-		Describe("IncorrectUsage", func() {
+		Describe("SayIncorrectUsage", func() {
 			Context("when no message is passed", func() {
 				It("outputs incorrect usage", func() {
-					terminalUI.IncorrectUsage("")
-					Expect(outputBuffer).To(test_helpers.Say("Incorrect Usage"))
+					terminalUI.SayIncorrectUsage("")
+					Expect(outputBuffer).To(test_helpers.Say("Incorrect Usage\n"))
 				})
 			})
 			Context("when a message is passed", func() {
 				It("outputs incorrect usage with the message", func() {
-					terminalUI.IncorrectUsage("You did that thing wrong")
-					Expect(outputBuffer).To(test_helpers.Say("Incorrect Usage: You did that thing wrong"))
+					terminalUI.SayIncorrectUsage("You did that thing wrong")
+					Expect(outputBuffer).To(test_helpers.Say("Incorrect Usage: You did that thing wrong\n"))
 				})
 			})
 		})
 
-		Describe("Dot", func() {
-			It("says a dot", func() {
-				terminalUI.Dot()
-				Expect(outputBuffer).To(test_helpers.Say("."))
-			})
-		})
-
-		Describe("NewLine", func() {
+		Describe("SayNewLine", func() {
 			It("says a newline", func() {
-				terminalUI.NewLine()
-				Expect(outputBuffer).To(test_helpers.Say("\n"))
+				terminalUI.SayNewLine()
+				Expect(outputBuffer).To(test_helpers.SayNewLine())
 			})
 		})
 	})
@@ -89,29 +82,53 @@ var _ = Describe("UI", func() {
 	Describe("Input Methods", func() {
 		Describe("Prompt", func() {
 			It("Prompts the user for input", func() {
-
 				answerChan := make(chan string)
 				go func() {
 					defer GinkgoRecover()
 
-					answerChan <- terminalUI.Prompt("Nickname: ")
+					answerChan <- terminalUI.Prompt("Nickname")
 					close(answerChan)
 				}()
 
 				Eventually(outputBuffer).Should(test_helpers.Say("Nickname: "))
 				stdinWriter.Write([]byte("RockStar\n"))
 
-				Expect(<-answerChan).To(Equal("RockStar"))
+				Eventually(answerChan).Should(Receive(Equal("RockStar")))
 				Eventually(answerChan).Should(BeClosed())
 			})
 		})
 
-		Describe("PasswordReader PromptForPassword", func() {
-			It("Calls to PasswordReader, which contains untested content", func() {
-				fakePasswordReader.PromptForPassword("Password: ")
+		Describe("PromptWithDefault", func() {
+			It("Prompts the user for input", func() {
+				answerChan := make(chan string)
+				go func() {
+					defer GinkgoRecover()
 
-				Expect(fakePasswordReader.PromptForPasswordCallCount()).To(Equal(1))
-				Expect(fakePasswordReader.PromptForPasswordArgsForCall(0)).To(Equal("Password: "))
+					answerChan <- terminalUI.PromptWithDefault("Nickname", "x")
+					close(answerChan)
+				}()
+
+				Eventually(outputBuffer).Should(test_helpers.Say("Nickname [x]: "))
+				stdinWriter.Write([]byte("RockStar\n"))
+
+				Eventually(answerChan).Should(Receive(Equal("RockStar")))
+				Eventually(answerChan).Should(BeClosed())
+			})
+
+			It("Prompts the user for input and uses the default value if enter is pressed", func() {
+				answerChan := make(chan string)
+				go func() {
+					defer GinkgoRecover()
+
+					answerChan <- terminalUI.PromptWithDefault("Nickname", "damon")
+					close(answerChan)
+				}()
+
+				Eventually(outputBuffer).Should(test_helpers.Say("Nickname [damon]: "))
+				stdinWriter.Write([]byte("\n"))
+
+				Eventually(answerChan).Should(Receive(Equal("damon")))
+				Eventually(answerChan).Should(BeClosed())
 			})
 		})
 	})

@@ -5,10 +5,10 @@ import (
 	"errors"
 	"io"
 
+	"github.com/cloudfoundry-incubator/bbs/models"
 	"github.com/cloudfoundry-incubator/receptor"
 	"github.com/cloudfoundry-incubator/receptor/fake_receptor"
 	"github.com/cloudfoundry-incubator/receptor/serialization"
-	"github.com/cloudfoundry-incubator/runtime-schema/models"
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 	"github.com/vito/go-sse/sse"
@@ -28,14 +28,15 @@ var _ = Describe("EventSource", func() {
 			var desiredLRPResponse receptor.DesiredLRPResponse
 
 			BeforeEach(func() {
-				desiredLRPResponse = serialization.DesiredLRPToResponse(
-					models.DesiredLRP{
+				desiredLRPResponse = serialization.DesiredLRPProtoToResponse(
+					&models.DesiredLRP{
 						ProcessGuid: "some-guid",
 						Domain:      "some-domain",
-						RootFS:      "some-rootfs",
-						Action: &models.RunAction{
+						RootFs:      "some-rootfs",
+						Action: models.WrapAction(&models.RunAction{
 							Path: "true",
-						},
+							User: "marcy",
+						}),
 					},
 				)
 			})
@@ -46,7 +47,7 @@ var _ = Describe("EventSource", func() {
 				BeforeEach(func() {
 					expectedEvent = receptor.NewDesiredLRPCreatedEvent(desiredLRPResponse)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -60,11 +61,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					desiredLRPCreateEvent, ok := event.(receptor.DesiredLRPCreatedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(desiredLRPCreateEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(desiredLRPCreateEvent).To(Equal(expectedEvent))
 				})
 			})
 
@@ -77,7 +78,7 @@ var _ = Describe("EventSource", func() {
 						desiredLRPResponse,
 					)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -91,11 +92,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					desiredLRPChangeEvent, ok := event.(receptor.DesiredLRPChangedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(desiredLRPChangeEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(desiredLRPChangeEvent).To(Equal(expectedEvent))
 				})
 			})
 
@@ -105,7 +106,7 @@ var _ = Describe("EventSource", func() {
 				BeforeEach(func() {
 					expectedEvent = receptor.NewDesiredLRPRemovedEvent(desiredLRPResponse)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -119,11 +120,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					desiredLRPRemovedEvent, ok := event.(receptor.DesiredLRPRemovedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(desiredLRPRemovedEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(desiredLRPRemovedEvent).To(Equal(expectedEvent))
 				})
 			})
 		})
@@ -132,8 +133,8 @@ var _ = Describe("EventSource", func() {
 			var actualLRPResponse receptor.ActualLRPResponse
 
 			BeforeEach(func() {
-				actualLRPResponse = serialization.ActualLRPToResponse(
-					models.ActualLRP{
+				actualLRPResponse = serialization.ActualLRPProtoToResponse(
+					&models.ActualLRP{
 						ActualLRPKey: models.NewActualLRPKey("some-guid", 0, "some-domain"),
 						State:        models.ActualLRPStateUnclaimed,
 						Since:        1,
@@ -148,7 +149,7 @@ var _ = Describe("EventSource", func() {
 				BeforeEach(func() {
 					expectedEvent = receptor.NewActualLRPCreatedEvent(actualLRPResponse)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -162,11 +163,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					actualLRPCreatedEvent, ok := event.(receptor.ActualLRPCreatedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(actualLRPCreatedEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(actualLRPCreatedEvent).To(Equal(expectedEvent))
 				})
 			})
 
@@ -179,7 +180,7 @@ var _ = Describe("EventSource", func() {
 						actualLRPResponse,
 					)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -193,11 +194,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					actualLRPChangedEvent, ok := event.(receptor.ActualLRPChangedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(actualLRPChangedEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(actualLRPChangedEvent).To(Equal(expectedEvent))
 				})
 			})
 
@@ -207,7 +208,7 @@ var _ = Describe("EventSource", func() {
 				BeforeEach(func() {
 					expectedEvent = receptor.NewActualLRPRemovedEvent(actualLRPResponse)
 					payload, err := json.Marshal(expectedEvent)
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					fakeRawEventSource.NextReturns(
 						sse.Event{
@@ -221,11 +222,11 @@ var _ = Describe("EventSource", func() {
 
 				It("returns the event", func() {
 					event, err := eventSource.Next()
-					Ω(err).ShouldNot(HaveOccurred())
+					Expect(err).NotTo(HaveOccurred())
 
 					actualLRPRemovedEvent, ok := event.(receptor.ActualLRPRemovedEvent)
-					Ω(ok).Should(BeTrue())
-					Ω(actualLRPRemovedEvent).Should(Equal(expectedEvent))
+					Expect(ok).To(BeTrue())
+					Expect(actualLRPRemovedEvent).To(Equal(expectedEvent))
 				})
 			})
 		})
@@ -244,7 +245,7 @@ var _ = Describe("EventSource", func() {
 
 			It("returns an unrecognized event error", func() {
 				_, err := eventSource.Next()
-				Ω(err).Should(Equal(receptor.ErrUnrecognizedEventType))
+				Expect(err).To(Equal(receptor.ErrUnrecognizedEventType))
 			})
 		})
 
@@ -262,7 +263,7 @@ var _ = Describe("EventSource", func() {
 
 			It("returns a json error", func() {
 				_, err := eventSource.Next()
-				Ω(err).Should(BeAssignableToTypeOf(receptor.NewInvalidPayloadError(errors.New("whatever"))))
+				Expect(err).To(BeAssignableToTypeOf(receptor.NewInvalidPayloadError(errors.New("whatever"))))
 			})
 		})
 
@@ -276,7 +277,7 @@ var _ = Describe("EventSource", func() {
 
 			It("propagates the error", func() {
 				_, err := eventSource.Next()
-				Ω(err).Should(Equal(receptor.NewRawEventSourceError(rawError)))
+				Expect(err).To(Equal(receptor.NewRawEventSourceError(rawError)))
 			})
 		})
 
@@ -287,7 +288,7 @@ var _ = Describe("EventSource", func() {
 
 			It("returns io.EOF", func() {
 				_, err := eventSource.Next()
-				Ω(err).Should(Equal(io.EOF))
+				Expect(err).To(Equal(io.EOF))
 			})
 		})
 
@@ -298,7 +299,7 @@ var _ = Describe("EventSource", func() {
 
 			It("returns receptor.ErrSourceClosed", func() {
 				_, err := eventSource.Next()
-				Ω(err).Should(Equal(receptor.ErrSourceClosed))
+				Expect(err).To(Equal(receptor.ErrSourceClosed))
 			})
 		})
 	})
@@ -307,12 +308,12 @@ var _ = Describe("EventSource", func() {
 		Context("when the raw source closes normally", func() {
 			It("closes the raw event source", func() {
 				eventSource.Close()
-				Ω(fakeRawEventSource.CloseCallCount()).Should(Equal(1))
+				Expect(fakeRawEventSource.CloseCallCount()).To(Equal(1))
 			})
 
 			It("does not error", func() {
 				err := eventSource.Close()
-				Ω(err).ShouldNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 			})
 		})
 
@@ -326,12 +327,12 @@ var _ = Describe("EventSource", func() {
 
 			It("closes the raw event source", func() {
 				eventSource.Close()
-				Ω(fakeRawEventSource.CloseCallCount()).Should(Equal(1))
+				Expect(fakeRawEventSource.CloseCallCount()).To(Equal(1))
 			})
 
 			It("propagates the error", func() {
 				err := eventSource.Close()
-				Ω(err).Should(Equal(receptor.NewCloseError(rawError)))
+				Expect(err).To(Equal(receptor.NewCloseError(rawError)))
 			})
 		})
 	})

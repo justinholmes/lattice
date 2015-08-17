@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/cloudfoundry-incubator/bbs/models"
 	"github.com/cloudfoundry-incubator/receptor"
 	"github.com/cloudfoundry-incubator/receptor/serialization"
 	"github.com/cloudfoundry-incubator/runtime-schema/bbs/bbserrors"
-	"github.com/cloudfoundry-incubator/runtime-schema/models"
+	oldmodels "github.com/cloudfoundry-incubator/runtime-schema/models"
 	"github.com/tedsuo/ifrit/ginkgomon"
 
 	. "github.com/onsi/ginkgo"
@@ -18,14 +19,14 @@ var _ = Describe("Event", func() {
 	var eventSource receptor.EventSource
 	var events chan receptor.Event
 	var done chan struct{}
-	var desiredLRP models.DesiredLRP
+	var oldDesiredLRP oldmodels.DesiredLRP
 
 	JustBeforeEach(func() {
 		receptorProcess = ginkgomon.Invoke(receptorRunner)
 
 		var err error
 		eventSource, err = client.SubscribeToEvents()
-		Ω(err).ShouldNot(HaveOccurred())
+		Expect(err).NotTo(HaveOccurred())
 
 		events = make(chan receptor.Event)
 		done = make(chan struct{})
@@ -43,20 +44,21 @@ var _ = Describe("Event", func() {
 		}()
 
 		rawMessage := json.RawMessage([]byte(`{"port":8080,"hosts":["primer-route"]}`))
-		primerLRP := models.DesiredLRP{
+		primerLRP := oldmodels.DesiredLRP{
 			ProcessGuid: "primer-guid",
 			Domain:      "primer-domain",
 			RootFS:      "primer:rootfs",
 			Routes: map[string]*json.RawMessage{
 				"router": &rawMessage,
 			},
-			Action: &models.RunAction{
+			Action: &oldmodels.RunAction{
+				User: "me",
 				Path: "true",
 			},
 		}
 
-		err = bbs.DesireLRP(logger, primerLRP)
-		Ω(err).ShouldNot(HaveOccurred())
+		err = legacyBBS.DesireLRP(logger, primerLRP)
+		Expect(err).NotTo(HaveOccurred())
 
 	PRIMING:
 		for {
@@ -65,17 +67,17 @@ var _ = Describe("Event", func() {
 				break PRIMING
 			case <-time.After(50 * time.Millisecond):
 				routeMsg := json.RawMessage([]byte(`{"port":8080,"hosts":["garbage-route"]}`))
-				err = bbs.UpdateDesiredLRP(logger, primerLRP.ProcessGuid, models.DesiredLRPUpdate{
+				err = legacyBBS.UpdateDesiredLRP(logger, primerLRP.ProcessGuid, oldmodels.DesiredLRPUpdate{
 					Routes: map[string]*json.RawMessage{
 						"router": &routeMsg,
 					},
 				})
-				Ω(err).ShouldNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 			}
 		}
 
-		err = bbs.RemoveDesiredLRPByProcessGuid(logger, primerLRP.ProcessGuid)
-		Ω(err).ShouldNot(HaveOccurred())
+		err = legacyBBS.RemoveDesiredLRPByProcessGuid(logger, primerLRP.ProcessGuid)
+		Expect(err).NotTo(HaveOccurred())
 
 		var event receptor.Event
 		for {
@@ -89,7 +91,7 @@ var _ = Describe("Event", func() {
 	AfterEach(func() {
 		ginkgomon.Kill(receptorProcess)
 		err := eventSource.Close()
-		Ω(err).ShouldNot(HaveOccurred())
+		Expect(err).NotTo(HaveOccurred())
 		Eventually(done).Should(BeClosed())
 	})
 
@@ -98,56 +100,61 @@ var _ = Describe("Event", func() {
 			routeMessage := json.RawMessage([]byte(`[{"port":8080,"hostnames":["original-route"]}]`))
 			routes := map[string]*json.RawMessage{"cf-router": &routeMessage}
 
-			desiredLRP = models.DesiredLRP{
+			oldDesiredLRP = oldmodels.DesiredLRP{
 				ProcessGuid: "some-guid",
 				Domain:      "some-domain",
 				RootFS:      "some:rootfs",
 				Routes:      routes,
-				Action: &models.RunAction{
-					Path: "true",
+				Action: &oldmodels.RunAction{
+					User:      "me",
+					Dir:       "/tmp",
+					Path:      "true",
+					LogSource: "logs",
 				},
 			}
 		})
 
 		It("receives events", func() {
 			By("creating a DesiredLRP")
-			err := bbs.DesireLRP(logger, desiredLRP)
-			Ω(err).ShouldNot(HaveOccurred())
+			err := legacyBBS.DesireLRP(logger, oldDesiredLRP)
+			Expect(err).NotTo(HaveOccurred())
 
-			desiredLRP, err := bbs.DesiredLRPByProcessGuid(desiredLRP.ProcessGuid)
-			Ω(err).ShouldNot(HaveOccurred())
+			desiredLRP, err := bbsClient.DesiredLRPByProcessGuid(oldDesiredLRP.ProcessGuid)
+			Expect(err).NotTo(HaveOccurred())
 
 			var event receptor.Event
 			Eventually(events).Should(Receive(&event))
 
 			desiredLRPCreatedEvent, ok := event.(receptor.DesiredLRPCreatedEvent)
-			Ω(ok).Should(BeTrue())
+			Expect(ok).To(BeTrue())
 
-			Ω(desiredLRPCreatedEvent.DesiredLRPResponse).Should(Equal(serialization.DesiredLRPToResponse(desiredLRP)))
+			actualJSON, _ := json.Marshal(desiredLRPCreatedEvent.DesiredLRPResponse)
+			expectedJSON, _ := json.Marshal(serialization.DesiredLRPProtoToResponse(desiredLRP))
+			Expect(actualJSON).To(MatchJSON(expectedJSON))
 
 			By("updating an existing DesiredLRP")
 			routeMessage := json.RawMessage([]byte(`[{"port":8080,"hostnames":["new-route"]}]`))
 			newRoutes := map[string]*json.RawMessage{
 				"cf-router": &routeMessage,
 			}
-			err = bbs.UpdateDesiredLRP(logger, desiredLRP.ProcessGuid, models.DesiredLRPUpdate{Routes: newRoutes})
-			Ω(err).ShouldNot(HaveOccurred())
+			err = legacyBBS.UpdateDesiredLRP(logger, oldDesiredLRP.ProcessGuid, oldmodels.DesiredLRPUpdate{Routes: newRoutes})
+			Expect(err).NotTo(HaveOccurred())
 
 			Eventually(events).Should(Receive(&event))
 
 			desiredLRPChangedEvent, ok := event.(receptor.DesiredLRPChangedEvent)
-			Ω(ok).Should(BeTrue())
-			Ω(desiredLRPChangedEvent.After.Routes).Should(Equal(receptor.RoutingInfo(newRoutes)))
+			Expect(ok).To(BeTrue())
+			Expect(desiredLRPChangedEvent.After.Routes).To(Equal(receptor.RoutingInfo(newRoutes)))
 
 			By("removing the DesiredLRP")
-			err = bbs.RemoveDesiredLRPByProcessGuid(logger, desiredLRP.ProcessGuid)
-			Ω(err).ShouldNot(HaveOccurred())
+			err = legacyBBS.RemoveDesiredLRPByProcessGuid(logger, oldDesiredLRP.ProcessGuid)
+			Expect(err).NotTo(HaveOccurred())
 
 			Eventually(events).Should(Receive(&event))
 
 			desiredLRPRemovedEvent, ok := event.(receptor.DesiredLRPRemovedEvent)
-			Ω(ok).Should(BeTrue())
-			Ω(desiredLRPRemovedEvent.DesiredLRPResponse.ProcessGuid).Should(Equal(desiredLRP.ProcessGuid))
+			Expect(ok).To(BeTrue())
+			Expect(desiredLRPRemovedEvent.DesiredLRPResponse.ProcessGuid).To(Equal(desiredLRP.ProcessGuid))
 		})
 	})
 
@@ -159,126 +166,177 @@ var _ = Describe("Event", func() {
 
 		var (
 			key            models.ActualLRPKey
-			instanceKey    models.ActualLRPInstanceKey
+			oldInstanceKey models.ActualLRPInstanceKey
 			newInstanceKey models.ActualLRPInstanceKey
 			netInfo        models.ActualLRPNetInfo
 		)
 
+		var (
+			legacyKey            oldmodels.ActualLRPKey
+			legacyOldInstanceKey oldmodels.ActualLRPInstanceKey
+			legacyNewInstanceKey oldmodels.ActualLRPInstanceKey
+			legacyNetInfo        oldmodels.ActualLRPNetInfo
+		)
+
 		BeforeEach(func() {
-			desiredLRP = models.DesiredLRP{
+			oldDesiredLRP = oldmodels.DesiredLRP{
 				ProcessGuid: processGuid,
 				Domain:      domain,
 				RootFS:      "some:rootfs",
 				Instances:   1,
-				Action: &models.RunAction{
+				Action: &oldmodels.RunAction{
 					Path: "true",
+					User: "me",
 				},
 			}
 
+			legacyKey = oldmodels.NewActualLRPKey(processGuid, 0, domain)
+			legacyOldInstanceKey = oldmodels.NewActualLRPInstanceKey("instance-guid", "cell-id")
+			legacyNewInstanceKey = oldmodels.NewActualLRPInstanceKey("other-instance-guid", "other-cell-id")
+			legacyNetInfo = oldmodels.NewActualLRPNetInfo("1.1.1.1", []oldmodels.PortMapping{})
+
 			key = models.NewActualLRPKey(processGuid, 0, domain)
-			instanceKey = models.NewActualLRPInstanceKey("instance-guid", "cell-id")
+			oldInstanceKey = models.NewActualLRPInstanceKey("instance-guid", "cell-id")
 			newInstanceKey = models.NewActualLRPInstanceKey("other-instance-guid", "other-cell-id")
-			netInfo = models.NewActualLRPNetInfo("1.1.1.1", []models.PortMapping{})
+			netInfo = models.NewActualLRPNetInfo("1.1.1.1")
 		})
 
 		It("receives events", func() {
 			By("creating a ActualLRP")
-			err := bbs.DesireLRP(logger, desiredLRP)
-			Ω(err).ShouldNot(HaveOccurred())
+			err := legacyBBS.DesireLRP(logger, oldDesiredLRP)
+			Expect(err).NotTo(HaveOccurred())
 
-			actualLRPGroup, err := bbs.ActualLRPGroupByProcessGuidAndIndex(desiredLRP.ProcessGuid, 0)
-			Ω(err).ShouldNot(HaveOccurred())
-			actualLRP := *actualLRPGroup.Instance
-
-			// discard DesiredLRP creation event
-			Eventually(events).Should(Receive())
+			actualLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex(oldDesiredLRP.ProcessGuid, 0)
+			Expect(err).NotTo(HaveOccurred())
+			actualLRP := actualLRPGroup.Instance
 
 			var event receptor.Event
-			Eventually(events).Should(Receive(&event))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPCreatedEvent{}))
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPCreatedEvent{}))
 			actualLRPCreatedEvent := event.(receptor.ActualLRPCreatedEvent)
-			Ω(actualLRPCreatedEvent.ActualLRPResponse).Should(Equal(serialization.ActualLRPToResponse(actualLRP, false)))
+			Expect(actualLRPCreatedEvent.ActualLRPResponse).To(Equal(serialization.ActualLRPProtoToResponse(actualLRP, false)))
 
-			By("updating the existing ActualLR")
-			err = bbs.ClaimActualLRP(logger, key, instanceKey)
-			Ω(err).ShouldNot(HaveOccurred())
+			By("updating the existing ActualLRP")
+			_, err = bbsClient.ClaimActualLRP(processGuid, 0, &oldInstanceKey)
+			Expect(err).NotTo(HaveOccurred())
 
 			before := actualLRP
-			actualLRPGroup, err = bbs.ActualLRPGroupByProcessGuidAndIndex(desiredLRP.ProcessGuid, 0)
-			Ω(err).ShouldNot(HaveOccurred())
-			actualLRP = *actualLRPGroup.Instance
+			actualLRPGroup, err = bbsClient.ActualLRPGroupByProcessGuidAndIndex(oldDesiredLRP.ProcessGuid, 0)
+			Expect(err).NotTo(HaveOccurred())
+			actualLRP = actualLRPGroup.Instance
 
-			Eventually(events).Should(Receive(&event))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
 			actualLRPChangedEvent := event.(receptor.ActualLRPChangedEvent)
-			Ω(actualLRPChangedEvent.Before).Should(Equal(serialization.ActualLRPToResponse(before, false)))
-			Ω(actualLRPChangedEvent.After).Should(Equal(serialization.ActualLRPToResponse(actualLRP, false)))
+			Expect(actualLRPChangedEvent.Before).To(Equal(serialization.ActualLRPProtoToResponse(before, false)))
+			Expect(actualLRPChangedEvent.After).To(Equal(serialization.ActualLRPProtoToResponse(actualLRP, false)))
 
 			By("evacuating the ActualLRP")
-			_, err = bbs.EvacuateRunningActualLRP(logger, key, instanceKey, netInfo, 0)
-			Ω(err).Should(Equal(bbserrors.ErrServiceUnavailable))
+			_, err = legacyBBS.EvacuateRunningActualLRP(logger, legacyKey, legacyOldInstanceKey, legacyNetInfo, 0)
+			Expect(err).To(Equal(bbserrors.ErrServiceUnavailable))
 
-			evacuatingLRP, err := bbs.EvacuatingActualLRPByProcessGuidAndIndex(desiredLRP.ProcessGuid, 0)
-			Ω(err).ShouldNot(HaveOccurred())
+			evacuatingLRPGroup, err := bbsClient.ActualLRPGroupByProcessGuidAndIndex(oldDesiredLRP.ProcessGuid, 0)
+			Expect(err).NotTo(HaveOccurred())
+			evacuatingLRP := evacuatingLRPGroup.Evacuating
 
-			Eventually(events).Should(Receive(&event))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPCreatedEvent{}))
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPCreatedEvent{}))
+			// this is a necessary hack until we migrate other things to protobufs or pointer structs
 			actualLRPCreatedEvent = event.(receptor.ActualLRPCreatedEvent)
-			Ω(actualLRPCreatedEvent.ActualLRPResponse).Should(Equal(serialization.ActualLRPToResponse(evacuatingLRP, true)))
+			response := actualLRPCreatedEvent.ActualLRPResponse
+			response.Ports = nil
+			Expect(response).To(Equal(serialization.ActualLRPProtoToResponse(evacuatingLRP, true)))
 
 			// discard instance -> UNCLAIMED
-			Eventually(events).Should(Receive())
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
 
 			By("starting and then evacuating the ActualLRP on another cell")
-			err = bbs.StartActualLRP(logger, key, newInstanceKey, netInfo)
-			Ω(err).ShouldNot(HaveOccurred())
+			_, err = bbsClient.StartActualLRP(&key, &newInstanceKey, &netInfo)
+			Expect(err).NotTo(HaveOccurred())
 
 			// discard instance -> RUNNING
-			Eventually(events).Should(Receive())
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
 
 			evacuatingBefore := evacuatingLRP
-			_, err = bbs.EvacuateRunningActualLRP(logger, key, newInstanceKey, netInfo, 0)
-			Ω(err).Should(Equal(bbserrors.ErrServiceUnavailable))
+			_, err = legacyBBS.EvacuateRunningActualLRP(logger, legacyKey, legacyNewInstanceKey, legacyNetInfo, 0)
+			Expect(err).To(Equal(bbserrors.ErrServiceUnavailable))
 
-			evacuatingLRP, err = bbs.EvacuatingActualLRPByProcessGuidAndIndex(desiredLRP.ProcessGuid, 0)
-			Ω(err).ShouldNot(HaveOccurred())
+			evacuatingLRPGroup, err = bbsClient.ActualLRPGroupByProcessGuidAndIndex(oldDesiredLRP.ProcessGuid, 0)
+			Expect(err).NotTo(HaveOccurred())
+			evacuatingLRP = evacuatingLRPGroup.Evacuating
 
-			Eventually(events).Should(Receive(&event))
+			Expect(err).NotTo(HaveOccurred())
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
+
 			actualLRPChangedEvent = event.(receptor.ActualLRPChangedEvent)
-			Ω(actualLRPChangedEvent.Before).Should(Equal(serialization.ActualLRPToResponse(evacuatingBefore, true)))
-			Ω(actualLRPChangedEvent.After).Should(Equal(serialization.ActualLRPToResponse(evacuatingLRP, true)))
+			response = actualLRPChangedEvent.Before
+			response.Ports = nil
+			Expect(response).To(Equal(serialization.ActualLRPProtoToResponse(evacuatingBefore, true)))
+
+			response = actualLRPChangedEvent.After
+			response.Ports = nil
+			Expect(response).To(Equal(serialization.ActualLRPProtoToResponse(evacuatingLRP, true)))
 
 			// discard instance -> UNCLAIMED
-			Eventually(events).Should(Receive())
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPChangedEvent{}))
 
 			By("removing the instance ActualLRP")
-			actualLRPGroup, err = bbs.ActualLRPGroupByProcessGuidAndIndex(desiredLRP.ProcessGuid, 0)
-			Ω(err).ShouldNot(HaveOccurred())
-			actualLRP = *actualLRPGroup.Instance
+			actualLRPGroup, err = bbsClient.ActualLRPGroupByProcessGuidAndIndex(oldDesiredLRP.ProcessGuid, 0)
+			Expect(err).NotTo(HaveOccurred())
+			actualLRP = actualLRPGroup.Instance
 
-			err = bbs.RemoveActualLRP(logger, key, models.ActualLRPInstanceKey{})
-			Ω(err).ShouldNot(HaveOccurred())
+			err = bbsClient.RemoveActualLRP(key.ProcessGuid, legacyKey.Index)
+			Expect(err).NotTo(HaveOccurred())
 
-			Eventually(events).Should(Receive(&event))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPRemovedEvent{}))
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPRemovedEvent{}))
+			// this is a necessary hack until we migrate other things to protobufs or pointer structs
 			actualLRPRemovedEvent := event.(receptor.ActualLRPRemovedEvent)
-			Ω(actualLRPRemovedEvent.ActualLRPResponse).Should(Equal(serialization.ActualLRPToResponse(actualLRP, false)))
+			response = actualLRPRemovedEvent.ActualLRPResponse
+			response.Ports = nil
+			Expect(response).To(Equal(serialization.ActualLRPProtoToResponse(actualLRP, false)))
 
 			By("removing the evacuating ActualLRP")
-			err = bbs.RemoveEvacuatingActualLRP(logger, key, newInstanceKey)
-			Ω(err).ShouldNot(HaveOccurred())
+			err = legacyBBS.RemoveEvacuatingActualLRP(logger, legacyKey, legacyNewInstanceKey)
+			Expect(err).NotTo(HaveOccurred())
 
-			Eventually(events).Should(Receive(&event))
+			Eventually(func() receptor.Event {
+				Eventually(events).Should(Receive(&event))
+				return event
+			}).Should(BeAssignableToTypeOf(receptor.ActualLRPRemovedEvent{}))
 
-			Ω(event).Should(BeAssignableToTypeOf(receptor.ActualLRPRemovedEvent{}))
+			Expect(event).To(BeAssignableToTypeOf(receptor.ActualLRPRemovedEvent{}))
+
+			// this is a necessary hack until we migrate other things to protobufs or pointer structs
 			actualLRPRemovedEvent = event.(receptor.ActualLRPRemovedEvent)
-			Ω(actualLRPRemovedEvent.ActualLRPResponse).Should(Equal(serialization.ActualLRPToResponse(evacuatingLRP, true)))
+			response = actualLRPRemovedEvent.ActualLRPResponse
+			response.Ports = nil
+			Expect(response).To(Equal(serialization.ActualLRPProtoToResponse(evacuatingLRP, true)))
 		})
 	})
 })

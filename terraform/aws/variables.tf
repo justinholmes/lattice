@@ -37,20 +37,20 @@ variable "aws_subnet_cidr_block" {
 variable "aws_image" {
     description = "The name of the image to base the launched instances."
     default = {
-        ap-northeast-1 = "ami-4ceaed4d"
-        ap-southeast-1 = "ami-f75875a5"
-        ap-southeast-2 = "ami-950b62af"
-        eu-central-1 = "ami-b01524ad"
-        eu-west-1 = "ami-863686f1"
-        sa-east-1 = "ami-cb70c1d6"
-        us-east-1 = "ami-76e27e1e"
-        us-west-1 = "ami-d5180890"
-        us-west-2 = "ami-838dd9b3"
+        ap-northeast-1 = "ami-8453ec84"
+        ap-southeast-1 = "ami-f0aca0a2"
+        ap-southeast-2 = "ami-63c58559"
+        eu-central-1 = "ami-08f5f115"
+        eu-west-1 = "ami-16d08161"
+        sa-east-1 = "ami-a1840dbc"
+        us-east-1 = "ami-9fd674f4"
+        us-west-1 = "ami-edee11a9"
+        us-west-2 = "ami-8f252dbf"
     }
 }
 
-variable "aws_instance_type_coordinator" {
-    description = "The machine type to use for the Lattice Coordinator instance."
+variable "aws_instance_type_brain" {
+    description = "The machine type to use for the Lattice Brain instance."
     default = "m3.medium"
 }
 
@@ -66,12 +66,10 @@ variable "num_cells" {
 
 variable "lattice_username" {
     description = "Lattice username."
-    default = "user"
 }
 
 variable "lattice_password" {
     description = "Lattice password."
-    default = "pass"
 }
 
 variable "local_lattice_tar_path" {

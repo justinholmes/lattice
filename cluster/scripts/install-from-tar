@@ -1,0 +1,70 @@
+#!/bin/bash
+
+set -e
+
+install_condenser() {
+    mkdir -p /var/lattice/lighttpd/blobs /var/lattice/etc
+    chown -R www-data:www-data /var/lattice/lighttpd
+
+    /etc/init.d/lighttpd stop
+
+    if [ -n "$LATTICE_USERNAME" ]; then
+        cp /tmp/lattice-build/common/webdav/lighttpd.conf-auth-enabled /etc/lighttpd/lighttpd.conf
+        echo $LATTICE_USERNAME:$(openssl passwd -crypt $LATTICE_PASSWORD) > /var/lattice/etc/lighttpd.user
+    else
+        cp /tmp/lattice-build/common/webdav/lighttpd.conf-auth-disabled /etc/lighttpd/lighttpd.conf
+    fi
+
+    /etc/init.d/lighttpd start
+
+    stage_cflinuxfs2_rootfs
+
+    sleep 1
+}
+
+stage_cflinuxfs2_rootfs() {
+    declare -r rootfs_download_path=/vagrant/build/downloads
+    if [ ! -f "$rootfs_download_path/cflinuxfs2.tar.gz" ]; then
+        rm -f $rootfs_download_path/cflinuxfs2.tar.gz
+        mkdir -p $rootfs_download_path
+        wget https://github.com/cloudfoundry/stacks/releases/download/1.4.0/cflinuxfs2-1.4.0.tar.gz --quiet -O $rootfs_download_path/cflinuxfs2.tar.gz
+        echo "Downloaded RootFS!"
+    fi
+
+    ## unpack to some fixed folder
+    mkdir -p /var/lattice/rootfs/cflinuxfs2
+    tar -xzf $rootfs_download_path/cflinuxfs2.tar.gz -C /var/lattice/rootfs/cflinuxfs2
+
+    echo "Preloaded CFLinuxFS2 RootFS enabled."
+}
+
+COMPONENT_TO_INSTALL=$1
+PATH_TO_LATTICE_TAR=$2
+
+if [ $COMPONENT_TO_INSTALL != "cell" ] && [ $COMPONENT_TO_INSTALL != "brain" ] && [ $COMPONENT_TO_INSTALL != "collocated" ]; then
+    echo "Incorrect Usage. Must install either cell or brain or both.
+    Usage: install-from-tar cell [LATTICE_TAR_PATH] OR
+           install-from-tar brain [LATTICE_TAR_PATH]
+           install-from-tar collocated [LATTICE_TAR_PATH]
+    "
+    exit 2
+fi
+
+tar -xf $PATH_TO_LATTICE_TAR -C /tmp
+
+/tmp/lattice-build/scripts/install-common
+
+
+# check for opt-in to condenser 
+export $(cat /var/lattice/setup/lattice-environment)
+
+install_condenser
+
+if [ $COMPONENT_TO_INSTALL == "collocated" ]; then
+    /tmp/lattice-build/scripts/install-brain
+    /tmp/lattice-build/scripts/install-cell
+else
+    /tmp/lattice-build/scripts/install-$COMPONENT_TO_INSTALL
+fi
+
+start bootstrap

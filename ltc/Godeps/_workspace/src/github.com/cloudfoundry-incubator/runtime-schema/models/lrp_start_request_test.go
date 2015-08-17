@@ -3,14 +3,14 @@ package models_test
 import (
 	"encoding/json"
 
-	. "github.com/cloudfoundry-incubator/runtime-schema/models"
+	"github.com/cloudfoundry-incubator/runtime-schema/models"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("LRPStartRequest", func() {
-	var lrpStart LRPStartRequest
+	var lrpStart models.LRPStartRequest
 	var lrpStartPayload string
 
 	BeforeEach(func() {
@@ -24,7 +24,8 @@ var _ = Describe("LRPStartRequest", func() {
       "action": {"download": {
           "from": "http://example.com",
           "to": "/tmp/internet",
-          "cache_key": ""
+          "cache_key": "",
+					"user": "someone"
         }
       },
       "disk_mb": 512,
@@ -49,10 +50,10 @@ var _ = Describe("LRPStartRequest", func() {
   }`
 
 		rawMessage := json.RawMessage([]byte(`{"port":5678,"hosts":["route-1","route-2"]}`))
-		lrpStart = LRPStartRequest{
+		lrpStart = models.LRPStartRequest{
 			Indices: []uint{2},
 
-			DesiredLRP: DesiredLRP{
+			DesiredLRP: models.DesiredLRP{
 				Domain:      "tests",
 				ProcessGuid: "some-guid",
 
@@ -70,11 +71,12 @@ var _ = Describe("LRPStartRequest", func() {
 				LogGuid:     "log-guid",
 				LogSource:   "the cloud",
 				MetricsGuid: "metrics-guid",
-				Action: &DownloadAction{
+				Action: &models.DownloadAction{
 					From: "http://example.com",
 					To:   "/tmp/internet",
+					User: "someone",
 				},
-				ModificationTag: ModificationTag{
+				ModificationTag: models.ModificationTag{
 					Epoch: "some-epoch",
 					Index: 50,
 				},
@@ -84,24 +86,24 @@ var _ = Describe("LRPStartRequest", func() {
 
 	Describe("ToJSON", func() {
 		It("should JSONify", func() {
-			jsonPayload, err := ToJSON(&lrpStart)
-			Ω(err).ShouldNot(HaveOccurred())
-			Ω(string(jsonPayload)).Should(MatchJSON(lrpStartPayload))
+			jsonPayload, err := models.ToJSON(&lrpStart)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(jsonPayload)).To(MatchJSON(lrpStartPayload))
 		})
 	})
 
 	Describe("FromJSON", func() {
-		var decodedLRPStartRequest *LRPStartRequest
+		var decodedLRPStartRequest *models.LRPStartRequest
 		var err error
 
 		JustBeforeEach(func() {
-			decodedLRPStartRequest = &LRPStartRequest{}
-			err = FromJSON([]byte(lrpStartPayload), decodedLRPStartRequest)
+			decodedLRPStartRequest = &models.LRPStartRequest{}
+			err = models.FromJSON([]byte(lrpStartPayload), decodedLRPStartRequest)
 		})
 
 		It("returns a LRP with correct fields", func() {
-			Ω(err).ShouldNot(HaveOccurred())
-			Ω(decodedLRPStartRequest).Should(Equal(&lrpStart))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(decodedLRPStartRequest).To(Equal(&lrpStart))
 		})
 
 		Context("with an invalid payload", func() {
@@ -110,7 +112,7 @@ var _ = Describe("LRPStartRequest", func() {
 			})
 
 			It("returns the error", func() {
-				Ω(err).Should(HaveOccurred())
+				Expect(err).To(HaveOccurred())
 			})
 		})
 
@@ -126,7 +128,8 @@ var _ = Describe("LRPStartRequest", func() {
       "action": {"download": {
           "from": "http://example.com",
           "to": "/tmp/internet",
-          "cache_key": ""
+          "cache_key": "",
+					"user": "someone"
         }
       },
       "disk_mb": 512,
@@ -146,8 +149,8 @@ var _ = Describe("LRPStartRequest", func() {
 			})
 
 			It("returns a validation error", func() {
-				Ω(err).Should(HaveOccurred())
-				Ω(err).Should(ContainElement(ErrInvalidField{"process_guid"}))
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(ContainElement(models.ErrInvalidField{"process_guid"}))
 			})
 		})
 
@@ -164,7 +167,8 @@ var _ = Describe("LRPStartRequest", func() {
       "action": {"download": {
           "from": "http://example.com",
           "to": "/tmp/internet",
-          "cache_key": ""
+          "cache_key": "",
+					"user": "someone"
         }
       },
       "disk_mb": 512,
@@ -183,8 +187,8 @@ var _ = Describe("LRPStartRequest", func() {
 			})
 
 			It("returns a validation error", func() {
-				Ω(err).Should(HaveOccurred())
-				Ω(err).Should(ContainElement(ErrInvalidField{"indices"}))
+				Expect(err).To(HaveOccurred())
+				Expect(err).To(ContainElement(models.ErrInvalidField{"indices"}))
 			})
 		})
 
@@ -201,7 +205,8 @@ var _ = Describe("LRPStartRequest", func() {
       "action": {"download": {
           "from": "http://example.com",
           "to": "/tmp/internet",
-          "cache_key": ""
+          "cache_key": "",
+					"user": "someone"
         }
       },
       "disk_mb": 512,
@@ -221,7 +226,7 @@ var _ = Describe("LRPStartRequest", func() {
 			})
 
 			It("returns a validation error", func() {
-				Ω(err).Should(BeAssignableToTypeOf(&json.UnmarshalTypeError{}))
+				Expect(err).To(BeAssignableToTypeOf(&json.UnmarshalTypeError{}))
 			})
 		})
 
